@@ -29,8 +29,8 @@
       {
         "label": "camera-overlay",
         "title": "Momentum Camera",
-        "width": 280,
-        "height": 180,
+        "width": 200,
+        "height": 200,
         "decorations": false,
         "alwaysOnTop": true,
         "transparent": true,
