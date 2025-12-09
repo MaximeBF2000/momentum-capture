@@ -1,0 +1,207 @@
+use crate::error::{AppError, AppResult};
+use std::sync::{Arc, Mutex};
+use std::process::{Command, Stdio};
+use std::io::Read;
+use tauri::{AppHandle, Emitter};
+use std::thread;
+use base64::{Engine as _, engine::general_purpose};
+use serde_json;
+
+pub struct CameraPreview {
+    is_running: Arc<Mutex<bool>>,
+    app_handle: Arc<Mutex<Option<AppHandle>>>,
+}
+
+impl CameraPreview {
+    pub fn new() -> Self {
+        Self {
+            is_running: Arc::new(Mutex::new(false)),
+            app_handle: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    pub fn set_app_handle(&mut self, app: AppHandle) {
+        *self.app_handle.lock().unwrap() = Some(app);
+    }
+
+    pub fn is_running(&self) -> bool {
+        *self.is_running.lock().unwrap()
+    }
+
+    pub fn start(&self) -> AppResult<()> {
+        let mut is_running = self.is_running.lock().unwrap();
+        
+        if *is_running {
+            // Already running, just return success
+            return Ok(());
+        }
+
+        // Check if FFmpeg is available
+        if Command::new("ffmpeg").arg("-version").output().is_err() {
+            return Err(AppError::Camera("FFmpeg is not installed. Please install FFmpeg to use camera preview.".to_string()));
+        }
+
+        *is_running = true;
+
+        let is_running_clone = self.is_running.clone();
+        let app_handle_clone = self.app_handle.clone();
+
+        // Start FFmpeg in a separate thread
+        thread::spawn(move || {
+            let mut cmd = Command::new("ffmpeg");
+            
+            #[cfg(target_os = "macos")]
+            {
+                // On macOS, avfoundation device format is "video_index:audio_index"
+                // Video devices: typically 0, 1, 2... (0 is usually first camera, 1 is screen)
+                // For camera preview, use device 0 (first camera) with no audio
+                // List devices with: ffmpeg -f avfoundation -list_devices true -i ""
+                // Use 30 fps for smooth preview, lower quality for speed
+                cmd.args(&[
+                    "-f", "avfoundation",
+                    "-framerate", "30",
+                    "-video_size", "640x480",
+                    "-i", "0:", // Camera device 0, no audio (empty after colon)
+                    "-vf", "fps=30", // Keep at 30 fps for smooth preview
+                    "-f", "image2pipe",
+                    "-vcodec", "mjpeg",
+                    "-q:v", "3", // Lower quality number = higher quality but faster encoding
+                    "-"
+                ]);
+            }
+            
+            #[cfg(target_os = "windows")]
+            {
+                cmd.args(&[
+                    "-f", "dshow",
+                    "-i", "video=Integrated Camera",
+                    "-vf", "fps=10",
+                    "-f", "image2pipe",
+                    "-vcodec", "mjpeg",
+                    "-q:v", "5",
+                    "-"
+                ]);
+            }
+            
+            #[cfg(target_os = "linux")]
+            {
+                cmd.args(&[
+                    "-f", "v4l2",
+                    "-i", "/dev/video0",
+                    "-vf", "fps=10",
+                    "-f", "image2pipe",
+                    "-vcodec", "mjpeg",
+                    "-q:v", "5",
+                    "-"
+                ]);
+            }
+            
+            cmd.stdout(Stdio::piped());
+            cmd.stderr(Stdio::piped()); // Capture stderr for debugging
+            
+            let mut process = match cmd.spawn() {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("Failed to spawn camera FFmpeg process: {}", e);
+                    *is_running_clone.lock().unwrap() = false;
+                    return;
+                }
+            };
+            
+            // Read stderr in a separate thread to capture errors (but don't log everything)
+            let stderr = process.stderr.take();
+            if let Some(mut stderr) = stderr {
+                let is_running_err = is_running_clone.clone();
+                std::thread::spawn(move || {
+                    let mut buffer = [0u8; 1024];
+                    while *is_running_err.lock().unwrap() {
+                        if let Ok(n) = stderr.read(&mut buffer) {
+                            if n > 0 {
+                                let error_msg = String::from_utf8_lossy(&buffer[..n]);
+                                // Only log actual errors, not warnings or info
+                                if error_msg.contains("Error") || error_msg.contains("error") {
+                                    eprintln!("Camera FFmpeg error: {}", error_msg);
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+
+            let mut stdout = process.stdout.take().unwrap();
+            let mut frame_id = 0u64;
+            let mut jpeg_data = Vec::with_capacity(50000); // Pre-allocate for typical JPEG size
+            let mut buffer = [0u8; 65536]; // Larger buffer for better performance
+            let mut found_start = false;
+            let mut last_frame_time = std::time::Instant::now();
+
+            while *is_running_clone.lock().unwrap() {
+                match stdout.read(&mut buffer) {
+                    Ok(0) => break, // EOF
+                    Ok(n) => {
+                        for i in 0..n {
+                            let byte = buffer[i];
+                            
+                            // Look for JPEG start marker (FF D8)
+                            if !found_start && i < n - 1 && buffer[i] == 0xFF && buffer[i + 1] == 0xD8 {
+                                found_start = true;
+                                jpeg_data.clear();
+                                jpeg_data.push(byte);
+                            } else if found_start {
+                                jpeg_data.push(byte);
+                                
+                                // Check for JPEG end marker (FF D9)
+                                if jpeg_data.len() >= 2 && 
+                                   jpeg_data[jpeg_data.len() - 2] == 0xFF && 
+                                   jpeg_data[jpeg_data.len() - 1] == 0xD9 {
+                                    // Complete JPEG frame found
+                                    // Only emit if enough time has passed (throttle to ~30 FPS max)
+                                    let now = std::time::Instant::now();
+                                    if now.duration_since(last_frame_time).as_millis() >= 33 {
+                                        let base64_frame = general_purpose::STANDARD.encode(&jpeg_data);
+                                        
+                                        if let Some(app) = app_handle_clone.lock().unwrap().as_ref() {
+                                            // Emit to all windows (camera-overlay will receive it)
+                                            let _ = app.emit("camera-frame", serde_json::json!({
+                                                "id": frame_id,
+                                                "width": 640,
+                                                "height": 480,
+                                                "format": "jpeg",
+                                                "data_base64": base64_frame
+                                            }));
+                                        }
+                                        
+                                        frame_id += 1;
+                                        last_frame_time = now;
+                                    }
+                                    
+                                    found_start = false;
+                                    jpeg_data.clear();
+                                }
+                            }
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        Ok(())
+    }
+
+    pub fn stop(&self) -> AppResult<()> {
+        let mut is_running = self.is_running.lock().unwrap();
+        
+        if !*is_running {
+            // Already stopped, return success
+            return Ok(());
+        }
+
+        *is_running = false;
+        
+        // Note: The FFmpeg process will detect is_running=false and exit naturally
+        // We don't need to kill it explicitly as the thread checks the flag
+        
+        Ok(())
+    }
+}
