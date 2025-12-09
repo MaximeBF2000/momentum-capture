@@ -21,16 +21,20 @@ export function CameraFrame() {
 
   if (!hasReceivedFrame) {
     return (
-      <div className="w-full h-full flex items-center justify-center bg-black rounded-full">
-        <span className="text-neutral-500 text-sm">Camera Loading...</span>
+      <div className="w-full h-full flex items-center justify-center bg-black rounded-full pointer-events-none">
+        <span className="text-neutral-500 text-sm pointer-events-none">
+          Camera Loading...
+        </span>
       </div>
     )
   }
 
   if (!currentFrameUrl) {
     return (
-      <div className="w-full h-full flex items-center justify-center bg-black rounded-full">
-        <span className="text-neutral-500 text-sm">Camera Off</span>
+      <div className="w-full h-full flex items-center justify-center bg-black rounded-full pointer-events-none">
+        <span className="text-neutral-500 text-sm pointer-events-none">
+          Camera Off
+        </span>
       </div>
     )
   }
@@ -39,7 +43,13 @@ export function CameraFrame() {
     <img
       src={currentFrameUrl}
       alt="Camera preview"
-      className="w-full h-full object-cover rounded-full"
+      className="w-full h-full object-cover rounded-full select-none pointer-events-none"
+      style={{
+        userSelect: 'none',
+        WebkitUserSelect: 'none',
+        pointerEvents: 'none'
+      }}
+      draggable={false}
     />
   )
 }

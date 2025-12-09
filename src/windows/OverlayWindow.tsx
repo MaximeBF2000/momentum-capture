@@ -105,10 +105,7 @@ export function OverlayWindow() {
   }, [setRecordingState, setElapsedTime, reset, setError, setSettings])
 
   return (
-    <div
-      className="w-full h-full flex items-center justify-center bg-transparent p-6"
-      data-tauri-drag-region="true"
-    >
+    <div className="w-full h-full flex items-center justify-center bg-transparent p-6">
       <ControlBar />
     </div>
   )

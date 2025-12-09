@@ -182,13 +182,18 @@ export function ControlBar() {
   const isCountdown = recordingState === 'countdown'
 
   return (
-    <div className="relative" data-tauri-drag-region="true">
+    <div className="relative">
       <div
-        style={{ padding: '10px' }}
-        className="flex items-center gap-x-6 bg-neutral-900/95 backdrop-blur-md rounded-full border border-neutral-700/50 shadow-2xl"
+        style={{
+          padding: '10px',
+          userSelect: 'none',
+          WebkitUserSelect: 'none'
+        }}
+        className="flex items-center gap-x-6 bg-neutral-900 backdrop-blur-md rounded-full border border-neutral-700/60 shadow-2xl select-none"
+        data-tauri-drag-region="true"
       >
         {/* Recording Indicator */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 pointer-events-none select-none">
           <div
             className={`w-2 h-2 rounded-full ${
               isRecording ? 'bg-red-500' : 'bg-neutral-600'
