@@ -183,7 +183,10 @@ export function ControlBar() {
 
   return (
     <div className="relative" data-tauri-drag-region="true">
-      <div className="flex items-center gap-x-6 px-10 py-5 bg-neutral-900/95 backdrop-blur-md rounded-full border border-neutral-700/50 shadow-2xl">
+      <div
+        style={{ padding: '10px' }}
+        className="flex items-center gap-x-6 bg-neutral-900/95 backdrop-blur-md rounded-full border border-neutral-700/50 shadow-2xl"
+      >
         {/* Recording Indicator */}
         <div className="flex items-center gap-2">
           <div
@@ -228,7 +231,7 @@ export function ControlBar() {
             <button
               onClick={handleStart}
               disabled={isCountdown}
-              className="w-8 h-8 rounded-full bg-white flex items-center justify-center hover:bg-neutral-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="cursor-pointer w-8 h-8 rounded-full bg-white flex items-center justify-center hover:bg-neutral-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               aria-label="Start Recording"
               data-tauri-drag-region="false"
             >
@@ -238,7 +241,7 @@ export function ControlBar() {
             <button
               onClick={handleStop}
               disabled={recordingState === 'stopping'}
-              className="w-8 h-8 rounded-full bg-red-500 flex items-center justify-center hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="cursor-pointer w-8 h-8 rounded-full bg-red-500 flex items-center justify-center hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               aria-label="Stop Recording"
               data-tauri-drag-region="false"
             >
@@ -250,7 +253,7 @@ export function ControlBar() {
           <button
             onClick={handleMicToggle}
             disabled={isCountdown || recordingState === 'stopping'}
-            className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+            className={`cursor-pointer w-8 h-8 rounded-full flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
               isMicEnabled
                 ? 'bg-neutral-800 border-2 border-green-500'
                 : 'bg-neutral-800 hover:bg-neutral-700'
@@ -271,7 +274,7 @@ export function ControlBar() {
           <button
             onClick={handleCameraToggle}
             disabled={isCountdown || recordingState === 'stopping'}
-            className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+            className={`cursor-pointer w-8 h-8 rounded-full flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
               isCameraEnabled
                 ? 'bg-neutral-800 border-2 border-blue-500'
                 : 'bg-neutral-800 hover:bg-neutral-700'
