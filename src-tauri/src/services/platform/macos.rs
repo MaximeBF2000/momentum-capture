@@ -4,6 +4,28 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+// Helper function to find FFmpeg executable on macOS
+fn find_ffmpeg() -> String {
+    // Try common macOS FFmpeg locations
+    let possible_paths = vec![
+        "ffmpeg", // System PATH
+        "/opt/homebrew/bin/ffmpeg", // Homebrew on Apple Silicon
+        "/usr/local/bin/ffmpeg", // Homebrew on Intel
+        "/usr/bin/ffmpeg", // System location
+    ];
+    
+    for path in possible_paths {
+        if Command::new(path).arg("-version").output().is_ok() {
+            println!("[FFmpeg] Found FFmpeg at: {}", path);
+            return path.to_string();
+        }
+    }
+    
+    // Default to "ffmpeg" and let it fail with a clear error if not found
+    eprintln!("[FFmpeg] WARNING: FFmpeg not found in common locations, trying system PATH");
+    "ffmpeg".to_string()
+}
+
 // Single muxed recorder that captures screen and audio together in one FFmpeg process
 pub struct MuxedRecorder {
     recording_process: Arc<Mutex<Option<std::process::Child>>>,
@@ -119,7 +141,8 @@ impl MuxedRecorder {
         
         // First, list available devices for debugging
         println!("[MuxedRecorder] Listing available AVFoundation devices...");
-        let list_cmd = Command::new("ffmpeg")
+        let ffmpeg_path = find_ffmpeg();
+        let list_cmd = Command::new(&ffmpeg_path)
             .args(&["-f", "avfoundation", "-list_devices", "true", "-i", ""])
             .output();
         
@@ -130,7 +153,8 @@ impl MuxedRecorder {
         
         // Single FFmpeg process that muxes screen and audio together
         // Use single avfoundation input "video_device:audio_device" for proper synchronization
-        let mut cmd = Command::new("ffmpeg");
+        let ffmpeg_path = find_ffmpeg();
+        let mut cmd = Command::new(&ffmpeg_path);
         
         // Single input: Screen + Microphone
         // Format: "video_index:audio_index" - this ensures proper sync
@@ -455,7 +479,8 @@ impl ScreenRecorder {
     pub fn start(&mut self, output_path: &PathBuf) -> AppResult<()> {
         // Use AVFoundation via ffmpeg for screen capture
         // TODO: Replace with native AVFoundation/ScreenCaptureKit APIs
-        let mut cmd = Command::new("ffmpeg");
+        let ffmpeg_path = find_ffmpeg();
+        let mut cmd = Command::new(&ffmpeg_path);
         
         cmd.args(&[
             "-f", "avfoundation",
@@ -528,7 +553,8 @@ impl ScreenRecorder {
         // Create a new temp file for the resumed segment
         // Note: This is a limitation - proper pause/resume would require concatenating segments
         // For now, we'll just continue recording to the same file (overwrites paused segment)
-        let mut cmd = Command::new("ffmpeg");
+        let ffmpeg_path = find_ffmpeg();
+        let mut cmd = Command::new(&ffmpeg_path);
         cmd.args(&[
             "-f", "avfoundation",
             "-framerate", "30",
@@ -681,7 +707,8 @@ impl AudioRecorder {
         
         // Use AVFoundation via ffmpeg for audio capture
         // TODO: Replace with native AVFoundation APIs
-        let mut cmd = Command::new("ffmpeg");
+        let ffmpeg_path = find_ffmpeg();
+        let mut cmd = Command::new(&ffmpeg_path);
         
         if mic_enabled {
             cmd.args(&[

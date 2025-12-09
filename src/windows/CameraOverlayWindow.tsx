@@ -1,7 +1,12 @@
 import { CameraFrame } from '../components/camera/CameraFrame'
+import { useEffect } from 'react'
 import '../App.css'
 
 export function CameraOverlayWindow() {
+  useEffect(() => {
+    console.log('[CameraOverlayWindow] Component mounted')
+  }, [])
+
   return (
     <div className="w-full h-full bg-transparent flex items-center justify-center p-2">
       <div

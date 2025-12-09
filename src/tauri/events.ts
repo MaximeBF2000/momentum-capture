@@ -8,7 +8,8 @@ export const RECORDING_EVENTS = {
   STOPPED: 'recording-stopped',
   SAVED: 'recording-saved',
   ERROR: 'recording-error',
-  CAMERA_FRAME: 'camera-frame'
+  CAMERA_FRAME: 'camera-frame',
+  CAMERA_ERROR: 'camera-error'
 } as const
 
 export type RecordingEventName =
@@ -30,6 +31,7 @@ export const subscribeToRecordingEvents = (callbacks: {
   onSaved?: (payload: RecordingSavedPayload) => void
   onError?: (payload: RecordingErrorPayload) => void
   onCameraFrame?: (frame: CameraFrame) => void
+  onCameraError?: (payload: RecordingErrorPayload) => void
 }) => {
   const unsubscribers: Array<() => void> = []
 
@@ -72,6 +74,12 @@ export const subscribeToRecordingEvents = (callbacks: {
   if (callbacks.onCameraFrame) {
     listen<CameraFrame>(RECORDING_EVENTS.CAMERA_FRAME, event => {
       callbacks.onCameraFrame?.(event.payload)
+    }).then(unsub => unsubscribers.push(unsub))
+  }
+
+  if (callbacks.onCameraError) {
+    listen<RecordingErrorPayload>(RECORDING_EVENTS.CAMERA_ERROR, event => {
+      callbacks.onCameraError?.(event.payload)
     }).then(unsub => unsubscribers.push(unsub))
   }
 

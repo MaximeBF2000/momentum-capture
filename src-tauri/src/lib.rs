@@ -43,15 +43,39 @@ pub fn run() {
             }
 
             // Load settings and show camera overlay if enabled
-            if let Ok(settings) = services::settings::load_settings() {
-                if settings.camera_enabled {
-                    if let Some(camera_window) = app.get_webview_window("camera-overlay") {
-                        camera_window.show().ok();
-                        if let Ok(mut preview) = app.state::<Mutex<CameraPreview>>().try_lock() {
-                            preview.set_app_handle(app.handle().clone());
-                            preview.start().ok();
+            println!("[App] Loading settings...");
+            match services::settings::load_settings() {
+                Ok(settings) => {
+                    println!("[App] Settings loaded: camera_enabled={}, mic_enabled={}", 
+                        settings.camera_enabled, settings.mic_enabled);
+                    if settings.camera_enabled {
+                        println!("[App] Camera is enabled, showing camera overlay...");
+                        if let Some(camera_window) = app.get_webview_window("camera-overlay") {
+                            match camera_window.show() {
+                                Ok(_) => {
+                                    println!("[App] Camera overlay window shown successfully");
+                                    if let Ok(mut preview) = app.state::<Mutex<CameraPreview>>().try_lock() {
+                                        preview.set_app_handle(app.handle().clone());
+                                        match preview.start() {
+                                            Ok(_) => println!("[App] Camera preview started successfully"),
+                                            Err(e) => eprintln!("[App] ERROR: Failed to start camera preview: {}", e),
+                                        }
+                                    } else {
+                                        eprintln!("[App] ERROR: Could not lock CameraPreview state");
+                                    }
+                                }
+                                Err(e) => eprintln!("[App] ERROR: Failed to show camera overlay window: {}", e),
+                            }
+                        } else {
+                            eprintln!("[App] ERROR: Camera overlay window not found");
                         }
+                    } else {
+                        println!("[App] Camera is disabled in settings");
                     }
+                }
+                Err(e) => {
+                    eprintln!("[App] ERROR: Failed to load settings: {}", e);
+                    println!("[App] Using default settings (camera disabled)");
                 }
             }
 

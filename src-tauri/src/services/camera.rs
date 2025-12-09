@@ -28,6 +28,25 @@ impl CameraPreview {
         *self.is_running.lock().unwrap()
     }
 
+    fn find_ffmpeg() -> Option<String> {
+        // Try common macOS FFmpeg locations
+        let possible_paths = vec![
+            "ffmpeg", // System PATH
+            "/opt/homebrew/bin/ffmpeg", // Homebrew on Apple Silicon
+            "/usr/local/bin/ffmpeg", // Homebrew on Intel
+            "/usr/bin/ffmpeg", // System location
+        ];
+        
+        for path in possible_paths {
+            if Command::new(path).arg("-version").output().is_ok() {
+                println!("[CameraPreview] Found FFmpeg at: {}", path);
+                return Some(path.to_string());
+            }
+        }
+        
+        None
+    }
+
     pub fn start(&self) -> AppResult<()> {
         let mut is_running = self.is_running.lock().unwrap();
         
@@ -36,10 +55,13 @@ impl CameraPreview {
             return Ok(());
         }
 
-        // Check if FFmpeg is available
-        if Command::new("ffmpeg").arg("-version").output().is_err() {
-            return Err(AppError::Camera("FFmpeg is not installed. Please install FFmpeg to use camera preview.".to_string()));
-        }
+        // Find FFmpeg executable
+        let ffmpeg_path = Self::find_ffmpeg()
+            .ok_or_else(|| AppError::Camera(
+                "FFmpeg is not installed or not found in PATH. Please install FFmpeg via Homebrew: brew install ffmpeg".to_string()
+            ))?;
+        
+        println!("[CameraPreview] Starting camera preview with FFmpeg: {}", ffmpeg_path);
 
         *is_running = true;
 
@@ -47,8 +69,9 @@ impl CameraPreview {
         let app_handle_clone = self.app_handle.clone();
 
         // Start FFmpeg in a separate thread
+        let ffmpeg_path_clone = ffmpeg_path.clone();
         thread::spawn(move || {
-            let mut cmd = Command::new("ffmpeg");
+            let mut cmd = Command::new(&ffmpeg_path_clone);
             
             #[cfg(target_os = "macos")]
             {
@@ -100,10 +123,21 @@ impl CameraPreview {
             cmd.stderr(Stdio::piped()); // Capture stderr for debugging
             
             let mut process = match cmd.spawn() {
-                Ok(p) => p,
+                Ok(p) => {
+                    println!("[CameraPreview] FFmpeg process spawned successfully (PID: {})", p.id());
+                    p
+                }
                 Err(e) => {
-                    eprintln!("Failed to spawn camera FFmpeg process: {}", e);
+                    let error_msg = format!("Failed to spawn camera FFmpeg process: {}. FFmpeg path used: {}", e, ffmpeg_path_clone);
+                    eprintln!("[CameraPreview] ERROR: {}", error_msg);
                     *is_running_clone.lock().unwrap() = false;
+                    
+                    // Try to emit error to frontend
+                    if let Some(app) = app_handle_clone.lock().unwrap().as_ref() {
+                        let _ = app.emit("camera-error", serde_json::json!({
+                            "message": error_msg
+                        }));
+                    }
                     return;
                 }
             };
@@ -162,13 +196,27 @@ impl CameraPreview {
                                         
                                         if let Some(app) = app_handle_clone.lock().unwrap().as_ref() {
                                             // Emit to all windows (camera-overlay will receive it)
-                                            let _ = app.emit("camera-frame", serde_json::json!({
+                                            match app.emit("camera-frame", serde_json::json!({
                                                 "id": frame_id,
                                                 "width": 640,
                                                 "height": 480,
                                                 "format": "jpeg",
                                                 "data_base64": base64_frame
-                                            }));
+                                            })) {
+                                                Ok(_) => {
+                                                    // Only log first frame to avoid spam
+                                                    if frame_id == 0 {
+                                                        println!("[CameraPreview] First camera frame emitted successfully");
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    eprintln!("[CameraPreview] ERROR: Failed to emit camera frame: {}", e);
+                                                }
+                                            }
+                                        } else {
+                                            if frame_id == 0 {
+                                                eprintln!("[CameraPreview] WARNING: App handle not available, cannot emit frames");
+                                            }
                                         }
                                         
                                         frame_id += 1;

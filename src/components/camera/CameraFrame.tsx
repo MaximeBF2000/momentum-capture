@@ -7,17 +7,37 @@ export function CameraFrame() {
   const [hasReceivedFrame, setHasReceivedFrame] = useState(false)
 
   useEffect(() => {
+    console.log(
+      '[CameraFrame] Component mounted, subscribing to camera frames...'
+    )
     const unsubscribe = subscribeToRecordingEvents({
       onCameraFrame: (frame: CameraFrameType) => {
-        console.log('Camera frame received:', frame.id)
+        console.log('[CameraFrame] Frame received:', frame.id)
         const dataUrl = `data:image/${frame.format};base64,${frame.data_base64}`
         setCurrentFrameUrl(dataUrl)
         setHasReceivedFrame(true)
+      },
+      onCameraError: payload => {
+        console.error('[CameraFrame] Camera error:', payload.message)
+        setHasReceivedFrame(false)
+        setCurrentFrameUrl(null)
       }
     })
 
-    return unsubscribe
-  }, [])
+    // Log if no frames received after 5 seconds
+    const timeout = setTimeout(() => {
+      if (!hasReceivedFrame) {
+        console.warn(
+          '[CameraFrame] WARNING: No camera frames received after 5 seconds. Check if camera preview is running.'
+        )
+      }
+    }, 5000)
+
+    return () => {
+      clearTimeout(timeout)
+      unsubscribe()
+    }
+  }, [hasReceivedFrame])
 
   if (!hasReceivedFrame) {
     return (
