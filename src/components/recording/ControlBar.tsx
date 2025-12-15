@@ -63,7 +63,7 @@ export function ControlBar() {
             countdownInterval = null
           }
 
-          // Start recording
+          // Start recording - set state optimistically to avoid UI delay
           try {
             const recordingState = useRecordingStore.getState()
             console.log(
@@ -73,6 +73,8 @@ export function ControlBar() {
                 camera: recordingState.isCameraEnabled
               }
             )
+            // Set state to recording immediately to enable buttons and start timer
+            setRecordingState('recording')
             await startRecording({
               includeMicrophone: recordingState.isMicEnabled,
               includeCamera: recordingState.isCameraEnabled

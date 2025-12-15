@@ -1,4 +1,6 @@
 use crate::error::{AppError, AppResult};
+use crate::services::platform::device_resolver;
+use crate::services::platform::screencapturekit_recorder;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -28,10 +30,10 @@ fn find_ffmpeg() -> String {
 
 // Single muxed recorder that captures screen and audio together in one FFmpeg process
 pub struct MuxedRecorder {
-    recording_process: Arc<Mutex<Option<std::process::Child>>>,
-    output_file: Option<PathBuf>,
+    pub recording_process: Arc<Mutex<Option<std::process::Child>>>,  // Made public for deadlock fix
+    pub output_file: Option<PathBuf>,  // Made public for deadlock fix
     is_paused: Arc<Mutex<bool>>,
-    mic_enabled: Arc<Mutex<bool>>,
+    pub mic_enabled: Arc<Mutex<bool>>,  // Made public for deadlock fix
 }
 
 // Legacy structs kept for compatibility during transition
@@ -50,7 +52,7 @@ pub struct AudioRecorder {
 
 // Synchronized recorder - now uses single muxed process
 pub struct SynchronizedRecorder {
-    muxed_recorder: MuxedRecorder,
+    pub muxed_recorder: MuxedRecorder,  // Made public to allow direct access for deadlock fix
     is_paused: Arc<Mutex<bool>>,
 }
 
@@ -63,16 +65,46 @@ impl SynchronizedRecorder {
     }
 
     pub fn start(&mut self, screen_path: &PathBuf, _audio_path: &PathBuf, mic_enabled: bool) -> AppResult<()> {
+        println!("[SynchronizedRecorder] start() called");
         println!("Starting muxed recording:");
         println!("  Output file: {:?}", screen_path);
         println!("  Mic enabled: {}", mic_enabled);
 
+        // CRITICAL: muxed_recorder.start() calls screencapturekit_recorder::start_recording()
+        // which does heavy setup work but uses its own internal STATE mutex
+        // The synchronized_recorder lock will be released immediately after this call returns
+        println!("[SynchronizedRecorder] Calling muxed_recorder.start()...");
         // Use single muxed FFmpeg process for screen + audio
-        self.muxed_recorder.start(screen_path, mic_enabled)?;
+        // This calls screencapturekit_recorder::start_recording() which does heavy work
+        let start_result = self.muxed_recorder.start(screen_path, mic_enabled);
+        println!("[SynchronizedRecorder] muxed_recorder.start() returned");
         
-        // Wait for process to initialize
+        match start_result {
+            Ok(_) => {
+                println!("[SynchronizedRecorder] ✓ muxed_recorder.start() succeeded");
+            }
+            Err(e) => {
+                eprintln!("[SynchronizedRecorder] ✗ muxed_recorder.start() failed: {}", e);
+                return Err(e);
+            }
+        }
+        
+        // NOTE: We return here WITHOUT doing the sleep/verification
+        // The caller will release the lock, then do the sleep/verification without holding locks
+        println!("[SynchronizedRecorder] start() completed (lock will be released by caller, then sleep/verification happens)");
+        
+        Ok(())
+    }
+    
+    // Separate method to verify process after start (called without holding lock)
+    pub fn verify_started(&self) -> AppResult<()> {
+        println!("[SynchronizedRecorder] verify_started() called");
+        println!("[SynchronizedRecorder] Waiting 1s for process initialization...");
+        // Wait for process to initialize - NO LOCKS HELD HERE
         std::thread::sleep(Duration::from_millis(1000));
+        println!("[SynchronizedRecorder] ✓ Wait complete");
         
+        println!("[SynchronizedRecorder] Verifying process is running...");
         // Verify process is running
         let process_exists = {
             let process_guard = self.muxed_recorder.recording_process.lock().unwrap();
@@ -80,10 +112,13 @@ impl SynchronizedRecorder {
         };
         
         if !process_exists {
+            eprintln!("[SynchronizedRecorder] ✗ Recording process not found");
             return Err(AppError::Recording("Recording process not found".to_string()));
         }
         
+        println!("[SynchronizedRecorder] ✓ Process verified running");
         println!("Muxed recording process initialized successfully");
+        println!("[SynchronizedRecorder] verify_started() completed");
         
         Ok(())
     }
@@ -133,40 +168,76 @@ impl MuxedRecorder {
     }
 
     pub fn start(&mut self, output_path: &PathBuf, mic_enabled: bool) -> AppResult<()> {
+        println!("[MuxedRecorder] start() called");
         *self.mic_enabled.lock().unwrap() = mic_enabled;
+        self.output_file = Some(output_path.clone());
         
         println!("[MuxedRecorder] Starting recording:");
         println!("[MuxedRecorder]   Output: {:?}", output_path);
         println!("[MuxedRecorder]   Mic enabled: {}", mic_enabled);
         
-        // First, list available devices for debugging
-        println!("[MuxedRecorder] Listing available AVFoundation devices...");
-        let ffmpeg_path = find_ffmpeg();
-        let list_cmd = Command::new(&ffmpeg_path)
-            .args(&["-f", "avfoundation", "-list_devices", "true", "-i", ""])
-            .output();
+        // Check if ScreenCaptureKit is available (macOS 12.3+)
+        let use_screencapturekit = screencapturekit_recorder::is_available();
         
-        if let Ok(output) = list_cmd {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            println!("[MuxedRecorder] Available devices:\n{}", stderr);
+        if use_screencapturekit {
+            println!("[MuxedRecorder] ScreenCaptureKit available (macOS 12.3+)");
+            println!("[MuxedRecorder] Using ScreenCaptureKit for native system audio capture");
+            println!("[MuxedRecorder] Calling screencapturekit_recorder::start_recording()...");
+            println!("[MuxedRecorder]   NOTE: This does heavy setup work but uses its own STATE mutex");
+            println!("[MuxedRecorder]   The synchronized_recorder lock will be released immediately after this returns");
+            // Try ScreenCaptureKit first, fall back to FFmpeg if not fully implemented
+            // This call does heavy setup work but uses its own internal STATE mutex
+            // The caller should release synchronized_recorder lock immediately after this returns
+            let start_result = screencapturekit_recorder::start_recording(output_path, mic_enabled);
+            println!("[MuxedRecorder] screencapturekit_recorder::start_recording() returned");
+            
+            match start_result {
+                Ok(()) => {
+                    println!("[MuxedRecorder] ✓ ScreenCaptureKit start succeeded");
+                    return Ok(());
+                }
+                Err(e) => {
+                    println!("[MuxedRecorder] ScreenCaptureKit implementation incomplete, falling back to FFmpeg");
+                    println!("[MuxedRecorder] Error: {}", e);
+                    // Continue to FFmpeg fallback
+                }
+            }
+        } else {
+            println!("[MuxedRecorder] ScreenCaptureKit not available (requires macOS 12.3+), using FFmpeg");
+            println!("[MuxedRecorder] Note: System audio capture requires macOS 12.3+ with ScreenCaptureKit");
         }
         
+        // Fallback to FFmpeg with AVFoundation (no system audio on older macOS)
+        println!("[MuxedRecorder] Using FFmpeg with AVFoundation");
+        
+        // Resolve device indices using Swift resolver
+        let devices = device_resolver::resolve_avf_indices()?;
+        let screen_index = devices.get_screen_index()?;
+        let mic_index = devices.get_mic_index()?;
+        
+        println!("[MuxedRecorder] Resolved device indices:");
+        println!("[MuxedRecorder]   Screen: {}", screen_index);
+        println!("[MuxedRecorder]   Built-in mic: {}", mic_index);
+        println!("[MuxedRecorder]   System audio: Not available (requires macOS 12.3+ for ScreenCaptureKit)");
+        
         // Single FFmpeg process that muxes screen and audio together
-        // Use single avfoundation input "video_device:audio_device" for proper synchronization
         let ffmpeg_path = find_ffmpeg();
         let mut cmd = Command::new(&ffmpeg_path);
         
-        // Single input: Screen + Microphone
-        // Format: "video_index:audio_index" - this ensures proper sync
-        // From device list: Screen is at index 3, MacBook Pro mic is at index 1
-        // Note: Device indices may vary, but typically screen is the last video device
-        println!("[MuxedRecorder] Configuring input: Screen device 3, Audio device 1 (MacBook Pro mic)");
-        println!("[MuxedRecorder]   Note: If this fails, check device list above for correct indices");
+        println!("[MuxedRecorder] Audio configuration:");
+        println!("[MuxedRecorder]   Mic enabled: {}", mic_enabled);
+        println!("[MuxedRecorder]   System audio: Not available (requires macOS 12.3+)");
+        
+        // Single input: Screen + Microphone (or screen only if mic disabled)
+        let audio_index = mic_index; // Use mic index (will be muted if mic_enabled is false)
+        println!("[MuxedRecorder] Configuring single input: Screen device {}, Audio device {} (built-in mic)", screen_index, audio_index);
+        
         cmd.args(&[
             "-f", "avfoundation",
-            "-framerate", "30", // Exact 30fps (device requires exact 30, not 29.97)
-            "-video_size", "1920x1440", // Explicit size to match screen resolution
-            "-i", "3:1", // Screen device 3, Audio device 1 (MacBook Pro microphone) - SINGLE INPUT for sync
+            "-framerate", "30",
+            "-capture_cursor", "1",
+            "-capture_mouse_clicks", "0",
+            "-i", &format!("{}:{}", screen_index, audio_index), // Screen + Audio
         ]);
         
         // Video filter: Convert pixel format from uyvy422 to yuv420p
@@ -188,19 +259,19 @@ impl MuxedRecorder {
             "-pix_fmt", "yuv420p", // Explicitly set output pixel format
         ]);
         
-        // Audio codec and filter options
-        // Always apply volume filter - set to 0 when muted, 1.0 when enabled
+        // Audio processing
         println!("[MuxedRecorder] Configuring audio codec: AAC");
         if mic_enabled {
-            println!("[MuxedRecorder]   Audio: Enabled (normal volume)");
+            // Single audio stream: microphone only
+            println!("[MuxedRecorder]   Audio: Mic only");
             cmd.args(&[
                 "-c:a", "aac",
                 "-b:a", "128k",
                 "-ar", "48000", // Sample rate
             ]);
         } else {
+            // Mic disabled: mute audio
             println!("[MuxedRecorder]   Audio: Muted (volume=0)");
-            // Apply volume filter to mute audio (gain = 0)
             cmd.args(&[
                 "-af", "volume=0", // Muted - set volume to 0
                 "-c:a", "aac",
@@ -221,9 +292,10 @@ impl MuxedRecorder {
         
         // Log key configuration for debugging
         println!("[MuxedRecorder] Configuration summary:");
-        println!("[MuxedRecorder]   Input: avfoundation device 3:1 (screen device 3 + MacBook Pro mic device 1)");
-        println!("[MuxedRecorder]   Video: 1920x1440@30fps, H.264");
-        println!("[MuxedRecorder]   Audio: AAC 48kHz, Mic: {}", if mic_enabled { "enabled" } else { "muted" });
+        println!("[MuxedRecorder]   Input: avfoundation device {}:{} (screen + mic)", screen_index, mic_index);
+        println!("[MuxedRecorder]   Audio: Mic only, {}", if mic_enabled { "enabled" } else { "muted" });
+        println!("[MuxedRecorder]   Video: Auto-detect resolution@30fps, H.264");
+        println!("[MuxedRecorder]   Audio codec: AAC 48kHz");
         println!("[MuxedRecorder]   Output: {:?}", output_path);
         
         // Capture stderr for debugging (we'll log it)
@@ -259,13 +331,18 @@ impl MuxedRecorder {
                             while let Some(newline_pos) = partial_line.find('\n') {
                                 let line = partial_line[..newline_pos].trim();
                                 if !line.is_empty() {
-                                    // Log all FFmpeg output, but highlight errors/warnings
-                                    if line.to_lowercase().contains("error") || 
-                                       line.to_lowercase().contains("failed") ||
-                                       line.to_lowercase().contains("warning") {
+                                    // Log ALL FFmpeg output for debugging (especially important for black screen issue)
+                                    let lower = line.to_lowercase();
+                                    if lower.contains("error") || 
+                                       lower.contains("failed") ||
+                                       lower.contains("warning") ||
+                                       lower.contains("cannot") ||
+                                       lower.contains("invalid") ||
+                                       lower.contains("not found") {
                                         eprintln!("[FFmpeg ERROR/WARNING] {}", line);
                                     } else {
-                                        eprintln!("[FFmpeg] {}", line);
+                                        // Log info messages too for debugging
+                                        eprintln!("[FFmpeg INFO] {}", line);
                                     }
                                 }
                                 partial_line = partial_line[newline_pos + 1..].to_string();
@@ -346,8 +423,36 @@ impl MuxedRecorder {
     }
 
     pub fn stop(&mut self) -> AppResult<PathBuf> {
-        let output_path = self.output_file.clone()
-            .ok_or_else(|| AppError::Recording("No output file path".to_string()))?;
+        println!("[MuxedRecorder] stop() called");
+
+        let output_path = match self.output_file.clone() {
+            Some(path) => {
+                println!("[MuxedRecorder] ✓ Output path: {:?}", path);
+                path
+            }
+            None => {
+                eprintln!("[MuxedRecorder] ✗ No output file path set");
+                return Err(AppError::Recording("No output file path".to_string()));
+            }
+        };
+
+        // ALWAYS try ScreenCaptureKit stop first - don't rely on is_recording_active()
+        // because the FFmpeg process might have exited which clears the STATE
+        println!("[MuxedRecorder] Calling screencapturekit_recorder::stop_recording() (always try this first)...");
+        let stop_result = screencapturekit_recorder::stop_recording();
+        println!("[MuxedRecorder] stop_recording() returned");
+
+        match stop_result {
+            Ok(_) => {
+                println!("[MuxedRecorder] ✓ stop_recording() succeeded");
+                println!("[MuxedRecorder] Returning output path: {:?}", output_path);
+                return Ok(output_path);
+            }
+            Err(e) => {
+                // If ScreenCaptureKit stop fails (e.g., wasn't active), try fallback
+                println!("[MuxedRecorder] ScreenCaptureKit stop failed: {}, trying fallback FFmpeg stop", e);
+            }
+        }
             
         if let Some(mut process) = self.recording_process.lock().unwrap().take() {
             println!("Stopping muxed recording process (PID: {})...", process.id());

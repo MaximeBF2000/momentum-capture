@@ -2119,10 +2119,12 @@ name = "momentum"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "block",
  "core-foundation 0.9.4",
  "core-media",
  "dirs 5.0.1",
  "objc",
+ "screencapturekit",
  "serde",
  "serde_json",
  "tauri",
@@ -3245,6 +3247,12 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
+name = "screencapturekit"
+version = "1.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a45f265e0ce18ab2ed8ad801b1cf6a83dd1fc327326857a09ee8ea74150b9471"
 
 [[package]]
 name = "selectors"

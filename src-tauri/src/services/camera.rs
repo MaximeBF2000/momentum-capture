@@ -1,4 +1,6 @@
 use crate::error::{AppError, AppResult};
+#[cfg(target_os = "macos")]
+use crate::services::platform::device_resolver;
 use std::sync::{Arc, Mutex};
 use std::process::{Command, Stdio};
 use std::io::Read;
@@ -63,6 +65,29 @@ impl CameraPreview {
         
         println!("[CameraPreview] Starting camera preview with FFmpeg: {}", ffmpeg_path);
 
+        // Resolve camera device index
+        #[cfg(target_os = "macos")]
+        let camera_index = {
+            match device_resolver::resolve_avf_indices() {
+                Ok(devices) => {
+                    match devices.get_camera_index() {
+                        Ok(idx) => {
+                            println!("[CameraPreview] Resolved built-in camera index: {}", idx);
+                            idx
+                        }
+                        Err(e) => {
+                            eprintln!("[CameraPreview] Failed to resolve camera index: {}, falling back to 0", e);
+                            0
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[CameraPreview] Failed to resolve device indices: {}, falling back to 0", e);
+                    0
+                }
+            }
+        };
+
         *is_running = true;
 
         let is_running_clone = self.is_running.clone();
@@ -70,21 +95,20 @@ impl CameraPreview {
 
         // Start FFmpeg in a separate thread
         let ffmpeg_path_clone = ffmpeg_path.clone();
+        #[cfg(target_os = "macos")]
+        let camera_index_clone = camera_index;
         thread::spawn(move || {
             let mut cmd = Command::new(&ffmpeg_path_clone);
             
             #[cfg(target_os = "macos")]
             {
-                // On macOS, avfoundation device format is "video_index:audio_index"
-                // Video devices: typically 0, 1, 2... (0 is usually first camera, 1 is screen)
-                // For camera preview, use device 0 (first camera) with no audio
-                // List devices with: ffmpeg -f avfoundation -list_devices true -i ""
+                // Use resolved built-in camera index
                 // Use 30 fps for smooth preview, lower quality for speed
                 cmd.args(&[
                     "-f", "avfoundation",
                     "-framerate", "30",
                     "-video_size", "640x480",
-                    "-i", "0:", // Camera device 0, no audio (empty after colon)
+                    "-i", &format!("{}:", camera_index_clone), // Built-in camera, no audio
                     "-vf", "fps=30", // Keep at 30 fps for smooth preview
                     "-f", "image2pipe",
                     "-vcodec", "mjpeg",
