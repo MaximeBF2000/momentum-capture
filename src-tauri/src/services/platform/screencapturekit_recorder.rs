@@ -62,32 +62,73 @@ impl SCStreamOutputTrait for FrameHandler {
                 }
             }
             SCStreamOutputType::Audio => {
-                // Write audio to named pipe (convert Float32 to s16le)
+                // Write system audio to file (convert Float32 to s16le interleaved stereo)
                 if let Some(ref mut writer) = *self.audio_writer.lock().unwrap() {
                     if let Some(audio_buffers) = sample.audio_buffer_list() {
-                        for buffer in audio_buffers.iter() {
-                            let data = buffer.data();
-                            let data_size = buffer.data_byte_size();
-                            if data_size == 0 { continue; }
-                            
-                            // Convert Float32 to s16le
-                            let num_samples = data_size / 4;
-                            let float_samples = unsafe {
-                                std::slice::from_raw_parts(data.as_ptr() as *const f32, num_samples)
-                            };
-                            
-                            let mut s16_data = Vec::with_capacity(num_samples * 2);
-                            for &s in float_samples {
-                                let clamped = s.max(-1.0).min(1.0);
-                                let s16 = (clamped * 32767.0) as i16;
-                                s16_data.extend_from_slice(&s16.to_le_bytes());
+                        let buffers: Vec<_> = audio_buffers.iter().collect();
+                        
+                        if buffers.is_empty() { return; }
+                        
+                        // ScreenCaptureKit gives us non-interleaved (planar) audio:
+                        // Buffer 0 = all left channel samples
+                        // Buffer 1 = all right channel samples (if stereo)
+                        // We need to interleave them for FFmpeg: L R L R L R...
+                        
+                        let first_buffer = &buffers[0];
+                        let data_size = first_buffer.data_byte_size();
+                        if data_size == 0 { return; }
+                        
+                        let num_samples_per_channel = data_size / 4; // Float32 = 4 bytes
+                        
+                        // Get left channel (or mono)
+                        let left_data = first_buffer.data();
+                        let left_samples = unsafe {
+                            std::slice::from_raw_parts(left_data.as_ptr() as *const f32, num_samples_per_channel)
+                        };
+                        
+                        // Get right channel if present, otherwise duplicate left
+                        let right_samples: Vec<f32>;
+                        let right_ref: &[f32] = if buffers.len() > 1 {
+                            let right_buffer = &buffers[1];
+                            let right_data = right_buffer.data();
+                            unsafe {
+                                std::slice::from_raw_parts(right_data.as_ptr() as *const f32, num_samples_per_channel)
                             }
-                            if writer.write_all(&s16_data).is_ok() {
-                                let count = self.audio_frame_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                                if count == 0 {
-                                    println!("[SCK] First audio frame written ({} bytes)", s16_data.len());
-                                } else if count % 100 == 0 {
-                                    println!("[SCK] Audio frames: {}", count + 1);
+                        } else {
+                            // Mono - duplicate left to right
+                            right_samples = left_samples.to_vec();
+                            &right_samples
+                        };
+                        
+                        // Check audio level
+                        let max_sample = left_samples.iter().chain(right_ref.iter())
+                            .map(|s| s.abs())
+                            .fold(0.0f32, f32::max);
+                        
+                        // Interleave and convert to s16le: L0 R0 L1 R1 L2 R2...
+                        let mut s16_data = Vec::with_capacity(num_samples_per_channel * 4); // 2 channels * 2 bytes
+                        for i in 0..num_samples_per_channel {
+                            // Left sample
+                            let left = left_samples[i].max(-1.0).min(1.0);
+                            let left_s16 = (left * 32767.0) as i16;
+                            s16_data.extend_from_slice(&left_s16.to_le_bytes());
+                            
+                            // Right sample
+                            let right = right_ref[i].max(-1.0).min(1.0);
+                            let right_s16 = (right * 32767.0) as i16;
+                            s16_data.extend_from_slice(&right_s16.to_le_bytes());
+                        }
+                        
+                        if writer.write_all(&s16_data).is_ok() {
+                            let count = self.audio_frame_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            if count == 0 {
+                                println!("[SCK] First audio frame: {} bytes ({}ch -> interleaved stereo), max_level={:.4}", 
+                                    s16_data.len(), buffers.len(), max_sample);
+                            } else if count % 100 == 0 {
+                                if max_sample > 0.01 {
+                                    println!("[SCK] Audio frames: {}, level={:.3} (HAS SOUND)", count + 1, max_sample);
+                                } else {
+                                    println!("[SCK] Audio frames: {}, level={:.4} (silence)", count + 1, max_sample);
                                 }
                             }
                         }
@@ -456,6 +497,7 @@ fn mux_final_video(
     // Input 1: System audio (raw s16le)
     let sys_audio_size = std::fs::metadata(system_audio_path).map(|m| m.len()).unwrap_or(0);
     let has_system_audio = sys_audio_size > 1000; // More than just header
+    println!("[SCK] System audio file size: {} bytes", sys_audio_size);
     
     if has_system_audio {
         cmd.args([
@@ -476,13 +518,16 @@ fn mux_final_video(
     cmd.args(["-map", "0:v"]); // Always map video
     
     if has_system_audio && has_mic_audio {
-        // Mix both audio sources
+        // Mix both audio sources with proper volume balance
+        // System audio gets 1.5x boost since it's often quieter
         cmd.args([
-            "-filter_complex", "[1:a][2:a]amix=inputs=2:duration=first[aout]",
+            "-filter_complex", 
+            "[1:a]volume=1.5[sys];[2:a]volume=1.0[mic];[sys][mic]amix=inputs=2:duration=shortest:normalize=0[aout]",
             "-map", "[aout]"
         ]);
     } else if has_system_audio {
-        cmd.args(["-map", "1:a"]);
+        // Just system audio - apply volume boost
+        cmd.args(["-filter_complex", "[1:a]volume=1.5[aout]", "-map", "[aout]"]);
     } else if has_mic_audio {
         cmd.args(["-map", "1:a"]); // mic becomes input 1 if no system audio
     } else {
@@ -501,7 +546,8 @@ fn mux_final_video(
     }
     
     // Audio encoding
-    cmd.args(["-c:v", "copy", "-c:a", "aac", "-b:a", "128k"]);
+    // Use -shortest to stop when video ends (audio files might be longer)
+    cmd.args(["-c:v", "copy", "-c:a", "aac", "-b:a", "128k", "-shortest"]);
     cmd.args(["-movflags", "+faststart"]);
     cmd.arg(output_path.to_str().unwrap());
     
@@ -509,8 +555,29 @@ fn mux_final_video(
         if has_system_audio { "system audio" } else { "no system audio" },
         if has_mic_audio { "mic" } else { "no mic" });
     
-    let status = cmd.status()
-        .map_err(|e| AppError::Recording(format!("Mux failed: {}", e)))?;
+    // Log the FFmpeg command for debugging
+    println!("[SCK] FFmpeg mux command: {:?}", cmd);
+    
+    // Capture FFmpeg stderr for error details
+    cmd.stderr(Stdio::piped());
+    let mut child = cmd.spawn()
+        .map_err(|e| AppError::Recording(format!("Mux spawn failed: {}", e)))?;
+    
+    // Read stderr
+    if let Some(stderr) = child.stderr.take() {
+        use std::io::{BufRead, BufReader};
+        let reader = BufReader::new(stderr);
+        for line in reader.lines() {
+            if let Ok(line) = line {
+                if !line.is_empty() {
+                    println!("[FFmpeg-Mux] {}", line);
+                }
+            }
+        }
+    }
+    
+    let status = child.wait()
+        .map_err(|e| AppError::Recording(format!("Mux wait failed: {}", e)))?;
     
     if !status.success() {
         return Err(AppError::Recording("Mux process failed".to_string()));
