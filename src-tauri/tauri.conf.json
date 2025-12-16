@@ -58,8 +58,8 @@
       "frameworks": [],
       "minimumSystemVersion": "12.3",
       "exceptionDomain": "",
-      "signingIdentity": null,
-      "entitlements": null,
+      "signingIdentity": "-",
+      "entitlements": "resources/Entitlements.plist",
       "infoPlist": "resources/Info.plist"
     }
   }
