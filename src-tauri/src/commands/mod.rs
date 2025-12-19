@@ -273,6 +273,30 @@ pub async fn toggle_microphone_during_recording(
 }
 
 #[tauri::command]
+pub async fn set_mic_muted(
+    muted: bool,
+) -> AppResult<()> {
+    println!("[Tauri Command] set_mic_muted({}) called", muted);
+    #[cfg(target_os = "macos")]
+    {
+        crate::services::platform::screencapturekit_recorder::set_mic_muted(muted);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_system_audio_muted(
+    muted: bool,
+) -> AppResult<()> {
+    println!("[Tauri Command] set_system_audio_muted({}) called", muted);
+    #[cfg(target_os = "macos")]
+    {
+        crate::services::platform::screencapturekit_recorder::set_system_audio_muted(muted);
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn set_camera_overlay_visible(
     visible: bool,
     app: AppHandle,

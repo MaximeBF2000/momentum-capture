@@ -73,6 +73,9 @@ The app waits 3 seconds (and a countdown is shown in the overlay window).
 The app starts recording the screen/camera/microphone (based on the user's settings).
 The app records the screen/camera/microphone.
 The user can pause the recording and resume it.
+The user can toggle the microphone on and off during the recording.
+The user can toggle the camera on and off during the recording.
+The user can toggle the system audio on and off during the recording.
 The user stops the recording.
 The app stops recording the screen/camera/microphone.
 The app saves the recording to the user's downloads directory.

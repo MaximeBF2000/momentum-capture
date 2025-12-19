@@ -5,7 +5,9 @@ import {
   Mic,
   MicOff,
   Camera,
-  CameraOff
+  CameraOff,
+  Volume2,
+  VolumeX
 } from 'lucide-react'
 import { useRecordingStore } from '../../state/recordingStore'
 import { TimerDisplay } from './TimerDisplay'
@@ -16,7 +18,9 @@ import {
   stopRecording,
   startRecording,
   setCameraOverlayVisible,
-  updateSettings
+  updateSettings,
+  setMicMuted,
+  setSystemAudioMuted
 } from '../../tauri/commands'
 import { useSettingsStore } from '../../state/settingsStore'
 import { useEffect } from 'react'
@@ -24,12 +28,14 @@ import { useEffect } from 'react'
 export function ControlBar() {
   const {
     recordingState,
-    isMicEnabled,
     isCameraEnabled,
+    isMicMuted,
+    isSystemAudioMuted,
     startCountdown,
     setRecordingState,
-    toggleMic,
     toggleCamera,
+    toggleMicMute,
+    toggleSystemAudioMute,
     setError
   } = useRecordingStore()
 
@@ -140,31 +146,6 @@ export function ControlBar() {
     }
   }
 
-  const handleMicToggle = async () => {
-    const newValue = !isMicEnabled
-    toggleMic()
-    updateSetting('micEnabled', newValue)
-
-    // If recording, toggle microphone in the active recording
-    if (recordingState === 'recording' || recordingState === 'paused') {
-      try {
-        const { toggleMicrophoneDuringRecording } = await import(
-          '../../tauri/commands'
-        )
-        await toggleMicrophoneDuringRecording(newValue)
-      } catch (err) {
-        console.error('Failed to toggle microphone during recording:', err)
-      }
-    }
-
-    // Update settings in backend
-    try {
-      await updateSettings({ ...settings, micEnabled: newValue })
-    } catch (err) {
-      console.error('Failed to update mic setting:', err)
-    }
-  }
-
   const handleCameraToggle = async () => {
     toggleCamera()
     const newValue = !isCameraEnabled
@@ -175,6 +156,32 @@ export function ControlBar() {
       await updateSettings({ ...settings, cameraEnabled: newValue })
     } catch (err) {
       console.error('Failed to update camera setting:', err)
+    }
+  }
+
+  const handleMicMuteToggle = async () => {
+    const newMuted = !isMicMuted
+    toggleMicMute()
+    // Always send the mute state to backend during recording
+    if (recordingState === 'recording' || recordingState === 'paused') {
+      try {
+        await setMicMuted(newMuted)
+      } catch (err) {
+        console.error('Failed to set mic mute:', err)
+      }
+    }
+  }
+
+  const handleSystemAudioMuteToggle = async () => {
+    const newMuted = !isSystemAudioMuted
+    toggleSystemAudioMute()
+    // Always send the mute state to backend during recording
+    if (recordingState === 'recording' || recordingState === 'paused') {
+      try {
+        await setSystemAudioMuted(newMuted)
+      } catch (err) {
+        console.error('Failed to set system audio mute:', err)
+      }
     }
   }
 
@@ -256,24 +263,43 @@ export function ControlBar() {
             </button>
           )}
 
-          {/* Microphone Toggle */}
+          {/* Microphone Mute Toggle */}
           <button
-            onClick={handleMicToggle}
+            onClick={handleMicMuteToggle}
             disabled={isCountdown || recordingState === 'stopping'}
             className={`cursor-pointer w-8 h-8 rounded-full flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-              isMicEnabled
+              !isMicMuted
+                ? 'bg-neutral-800 border-2 border-green-500'
+                : 'bg-neutral-800 hover:bg-neutral-700'
+            }`}
+            aria-label={isMicMuted ? 'Unmute Microphone' : 'Mute Microphone'}
+            data-tauri-drag-region="false"
+          >
+            {!isMicMuted ? (
+              <Mic className="w-4 h-4 text-green-500" />
+            ) : (
+              <MicOff className="w-4 h-4 text-neutral-400" />
+            )}
+          </button>
+
+          {/* System Audio Mute Toggle */}
+          <button
+            onClick={handleSystemAudioMuteToggle}
+            disabled={isCountdown || recordingState === 'stopping'}
+            className={`cursor-pointer w-8 h-8 rounded-full flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+              !isSystemAudioMuted
                 ? 'bg-neutral-800 border-2 border-green-500'
                 : 'bg-neutral-800 hover:bg-neutral-700'
             }`}
             aria-label={
-              isMicEnabled ? 'Disable Microphone' : 'Enable Microphone'
+              isSystemAudioMuted ? 'Unmute System Audio' : 'Mute System Audio'
             }
             data-tauri-drag-region="false"
           >
-            {isMicEnabled ? (
-              <Mic className="w-4 h-4 text-green-500" />
+            {!isSystemAudioMuted ? (
+              <Volume2 className="w-4 h-4 text-green-500" />
             ) : (
-              <MicOff className="w-4 h-4 text-neutral-400" />
+              <VolumeX className="w-4 h-4 text-neutral-400" />
             )}
           </button>
 

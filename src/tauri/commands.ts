@@ -38,3 +38,11 @@ export const toggleMicrophoneDuringRecording = async (
 ): Promise<void> => {
   await invoke('toggle_microphone_during_recording', { enabled })
 }
+
+export const setMicMuted = async (muted: boolean): Promise<void> => {
+  await invoke('set_mic_muted', { muted })
+}
+
+export const setSystemAudioMuted = async (muted: boolean): Promise<void> => {
+  await invoke('set_system_audio_muted', { muted })
+}

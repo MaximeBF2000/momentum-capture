@@ -90,6 +90,8 @@ pub fn run() {
             commands::update_settings,
             commands::set_camera_overlay_visible,
             commands::toggle_microphone_during_recording,
+            commands::set_mic_muted,
+            commands::set_system_audio_muted,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

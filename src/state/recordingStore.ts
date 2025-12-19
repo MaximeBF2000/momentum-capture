@@ -7,6 +7,8 @@ interface RecordingStore {
   countdownSecondsRemaining: number | null
   isMicEnabled: boolean
   isCameraEnabled: boolean
+  isMicMuted: boolean
+  isSystemAudioMuted: boolean
   errorMessage: string | null
 
   // Actions
@@ -16,6 +18,8 @@ interface RecordingStore {
   setElapsedTime: (ms: number) => void
   toggleMic: () => void
   toggleCamera: () => void
+  toggleMicMute: () => void
+  toggleSystemAudioMute: () => void
   setError: (message: string | null) => void
   reset: () => void
 }
@@ -26,6 +30,8 @@ export const useRecordingStore = create<RecordingStore>(set => ({
   countdownSecondsRemaining: null,
   isMicEnabled: false,
   isCameraEnabled: false,
+  isMicMuted: false,
+  isSystemAudioMuted: false,
   errorMessage: null,
 
   startCountdown: () => {
@@ -65,6 +71,14 @@ export const useRecordingStore = create<RecordingStore>(set => ({
     set(state => ({ isCameraEnabled: !state.isCameraEnabled }))
   },
 
+  toggleMicMute: () => {
+    set(state => ({ isMicMuted: !state.isMicMuted }))
+  },
+
+  toggleSystemAudioMute: () => {
+    set(state => ({ isSystemAudioMuted: !state.isSystemAudioMuted }))
+  },
+
   setError: message => {
     set({ errorMessage: message })
   },
@@ -74,6 +88,8 @@ export const useRecordingStore = create<RecordingStore>(set => ({
       recordingState: 'idle',
       elapsedTimeMs: 0,
       countdownSecondsRemaining: null,
+      isMicMuted: false,
+      isSystemAudioMuted: false,
       errorMessage: null
     })
   }
