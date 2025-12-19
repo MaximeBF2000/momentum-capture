@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { OverlayWindow } from './windows/OverlayWindow'
 import { CameraOverlayWindow } from './windows/CameraOverlayWindow'
+import { SettingsWindow } from './windows/SettingsWindow'
 
 function App() {
   const [windowLabel, setWindowLabel] = useState<string | null>(null)
@@ -23,6 +24,10 @@ function App() {
 
   if (windowLabel === 'camera-overlay') {
     return <CameraOverlayWindow />
+  }
+
+  if (windowLabel === 'settings') {
+    return <SettingsWindow />
   }
 
   return <OverlayWindow />

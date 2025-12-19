@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { listen } from '@tauri-apps/api/event'
 import { ControlBar } from '../components/recording/ControlBar'
 import { useRecordingStore } from '../state/recordingStore'
 import { useSettingsStore } from '../state/settingsStore'
@@ -97,10 +98,23 @@ export function OverlayWindow() {
       }
     })
 
+    const immersiveShortcutListener = listen<{ shortcut: string }>(
+      'immersive-shortcut-updated',
+      event => {
+        setSettings({
+          ...useSettingsStore.getState().settings,
+          immersiveShortcut: event.payload.shortcut
+        })
+      }
+    )
+
     return () => {
       unsubscribe()
       unsubscribeStore()
       stopTimer()
+      immersiveShortcutListener.then(unsub => unsub()).catch(() => {
+        /* ignore */
+      })
     }
   }, [setRecordingState, setElapsedTime, reset, setError, setSettings])
 

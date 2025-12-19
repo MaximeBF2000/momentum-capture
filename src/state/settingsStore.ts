@@ -13,7 +13,8 @@ interface SettingsStore {
 export const useSettingsStore = create<SettingsStore>(set => ({
   settings: {
     micEnabled: false,
-    cameraEnabled: false
+    cameraEnabled: false,
+    immersiveShortcut: 'Option+I'
   },
   setSettings: settings => set({ settings }),
   updateSetting: (key, value) =>

@@ -14,6 +14,7 @@ export interface RecordingOptions {
 export interface AppSettings {
   micEnabled: boolean
   cameraEnabled: boolean
+  immersiveShortcut: string
   saveLocation?: string // Defaults to Downloads
 }
 

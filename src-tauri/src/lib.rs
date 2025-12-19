@@ -3,81 +3,36 @@ mod models;
 mod services;
 mod commands;
 
-use services::{Recorder, CameraPreview};
-use std::sync::Mutex;
-use tauri::{Manager, PhysicalPosition};
+use crate::error::{AppError, AppResult};
+use crate::models::AppSettings;
+use services::{Recorder, CameraPreview, immersive::ImmersiveMode};
+use std::sync::{mpsc, Arc, Mutex};
+use tauri::{
+    menu::{Menu, MenuId, MenuItemBuilder, MenuItemKind, Submenu},
+    AppHandle, Manager, PhysicalPosition,
+};
+
+const TOGGLE_IMMERSIVE_MENU_ID: &str = "toggle-immersive-mode";
+const OPEN_SETTINGS_MENU_ID: &str = "open-settings-window";
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            // Initialize services
+            let app_handle = app.handle();
+
             app.manage(Mutex::new(Recorder::new()));
             app.manage(Mutex::new(CameraPreview::new()));
+            app.manage(Arc::new(Mutex::new(ImmersiveMode::new())));
 
-            // Position overlay window in top-right
-            if let Some(overlay_window) = app.get_webview_window("overlay") {
-                if let Ok(monitor) = overlay_window.primary_monitor() {
-                    if let Some(monitor) = monitor {
-                        let monitor_size = monitor.size();
-                        let window_size = overlay_window.outer_size().unwrap();
-                        let x = monitor_size.width as i32 - window_size.width as i32 - 20;
-                        let y = 20;
-                        overlay_window.set_position(PhysicalPosition::new(x, y)).ok();
-                    }
-                }
-            }
+            position_overlay_windows(&app_handle);
 
-            // Position camera overlay window in bottom-right
-            if let Some(camera_window) = app.get_webview_window("camera-overlay") {
-                if let Ok(monitor) = camera_window.primary_monitor() {
-                    if let Some(monitor) = monitor {
-                        let monitor_size = monitor.size();
-                        let window_size = camera_window.outer_size().unwrap();
-                        let x = monitor_size.width as i32 - window_size.width as i32 - 20;
-                        let y = monitor_size.height as i32 - window_size.height as i32 - 20;
-                        camera_window.set_position(PhysicalPosition::new(x, y)).ok();
-                    }
-                }
-            }
-
-            // Load settings and show camera overlay if enabled
-            println!("[App] Loading settings...");
-            match services::settings::load_settings() {
-                Ok(settings) => {
-                    println!("[App] Settings loaded: camera_enabled={}, mic_enabled={}", 
-                        settings.camera_enabled, settings.mic_enabled);
-                    if settings.camera_enabled {
-                        println!("[App] Camera is enabled, showing camera overlay...");
-                        if let Some(camera_window) = app.get_webview_window("camera-overlay") {
-                            match camera_window.show() {
-                                Ok(_) => {
-                                    println!("[App] Camera overlay window shown successfully");
-                                    if let Ok(mut preview) = app.state::<Mutex<CameraPreview>>().try_lock() {
-                                        preview.set_app_handle(app.handle().clone());
-                                        match preview.start() {
-                                            Ok(_) => println!("[App] Camera preview started successfully"),
-                                            Err(e) => eprintln!("[App] ERROR: Failed to start camera preview: {}", e),
-                                        }
-                                    } else {
-                                        eprintln!("[App] ERROR: Could not lock CameraPreview state");
-                                    }
-                                }
-                                Err(e) => eprintln!("[App] ERROR: Failed to show camera overlay window: {}", e),
-                            }
-                        } else {
-                            eprintln!("[App] ERROR: Camera overlay window not found");
-                        }
-                    } else {
-                        println!("[App] Camera is disabled in settings");
-                    }
-                }
-                Err(e) => {
-                    eprintln!("[App] ERROR: Failed to load settings: {}", e);
-                    println!("[App] Using default settings (camera disabled)");
-                }
-            }
+            let settings = services::settings::load_settings().unwrap_or_default();
+            initialize_camera_overlay(&app_handle, &settings)?;
+            build_app_menu(&app_handle, &settings)?;
+            register_menu_handlers(&app_handle)?;
+            register_immersive_shortcut_handler(&app_handle, &settings.immersive_shortcut)?;
 
             Ok(())
         })
@@ -92,7 +47,185 @@ pub fn run() {
             commands::toggle_microphone_during_recording,
             commands::set_mic_muted,
             commands::set_system_audio_muted,
+            commands::toggle_immersive_mode,
+            commands::set_immersive_mode,
+            commands::update_immersive_shortcut,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+fn position_overlay_windows(app: &tauri::AppHandle) {
+    if let Some(overlay_window) = app.get_webview_window("overlay") {
+        if let Ok(monitor) = overlay_window.primary_monitor() {
+            if let Some(monitor) = monitor {
+                if let Ok(window_size) = overlay_window.outer_size() {
+                    let monitor_size = monitor.size();
+                    let x = monitor_size.width as i32 - window_size.width as i32 - 20;
+                    overlay_window
+                        .set_position(PhysicalPosition::new(x, 20))
+                        .ok();
+                }
+            }
+        }
+    }
+
+    if let Some(camera_window) = app.get_webview_window("camera-overlay") {
+        if let Ok(monitor) = camera_window.primary_monitor() {
+            if let Some(monitor) = monitor {
+                if let Ok(window_size) = camera_window.outer_size() {
+                    let monitor_size = monitor.size();
+                    let x = monitor_size.width as i32 - window_size.width as i32 - 20;
+                    let y = monitor_size.height as i32 - window_size.height as i32 - 20;
+                    camera_window
+                        .set_position(PhysicalPosition::new(x, y))
+                        .ok();
+                }
+            }
+        }
+    }
+}
+
+fn initialize_camera_overlay(app: &tauri::AppHandle, settings: &AppSettings) -> AppResult<()> {
+    let camera_state = app.state::<Mutex<CameraPreview>>();
+    if settings.camera_enabled {
+        if let Some(window) = app.get_webview_window("camera-overlay") {
+            window.show()?;
+        }
+        let mut preview = camera_state.lock().unwrap();
+        preview.set_app_handle(app.clone());
+        if !preview.is_running() {
+            preview.start()?;
+        }
+    } else if let Some(window) = app.get_webview_window("camera-overlay") {
+        window.hide()?;
+    }
+    Ok(())
+}
+
+fn build_app_menu(app: &AppHandle, settings: &AppSettings) -> AppResult<()> {
+    let menu = Menu::default(app)?;
+    let pkg_name = app.package_info().name.clone();
+
+    if let Some(app_submenu) = find_app_submenu(&menu, &pkg_name)? {
+        append_menu_items(app_submenu, app, settings)?;
+    } else {
+        let submenu = Submenu::new(app, pkg_name, true)?;
+        append_menu_items(submenu.clone(), app, settings)?;
+        menu.append(&submenu)?;
+    }
+
+    app.set_menu(menu)?;
+    Ok(())
+}
+
+fn register_menu_handlers(app: &AppHandle) -> AppResult<()> {
+    app.on_menu_event(|app, event| {
+        if event.id == MenuId::new(TOGGLE_IMMERSIVE_MENU_ID) {
+            if let Err(err) = commands::toggle_immersive_mode_from_menu(app) {
+                eprintln!("[Menu] Failed to toggle immersive mode: {}", err);
+            }
+        } else if event.id == MenuId::new(OPEN_SETTINGS_MENU_ID) {
+            if let Err(err) = show_settings_window(app) {
+                eprintln!("[Menu] Failed to open settings window: {}", err);
+            }
+        }
+    });
+
+    Ok(())
+}
+
+fn find_app_submenu<'a>(
+    menu: &'a Menu<tauri::Wry>,
+    name: &str,
+) -> AppResult<Option<Submenu<tauri::Wry>>> {
+    for item in menu.items()? {
+        if let MenuItemKind::Submenu(submenu) = item {
+            if submenu.text()? == name {
+                return Ok(Some(submenu.clone()));
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn append_menu_items(
+    submenu: Submenu<tauri::Wry>,
+    app: &AppHandle,
+    settings: &AppSettings,
+) -> AppResult<()> {
+    let toggle_item = MenuItemBuilder::new("Toggle Immersive Mode")
+        .id(MenuId::new(TOGGLE_IMMERSIVE_MENU_ID))
+        .accelerator(&settings.immersive_shortcut)
+        .build(app)?;
+    submenu.append(&toggle_item)?;
+
+    let settings_item = MenuItemBuilder::new("Settings…")
+        .id(MenuId::new(OPEN_SETTINGS_MENU_ID))
+        .accelerator("Cmd+,")
+        .build(app)?;
+    submenu.append(&settings_item)?;
+    Ok(())
+}
+
+pub(crate) fn update_toggle_menu_shortcut(
+    app: &AppHandle,
+    shortcut: &str,
+) -> AppResult<()> {
+    if let Some(menu) = app.menu() {
+        if let Some(item_kind) = menu.get(&MenuId::new(TOGGLE_IMMERSIVE_MENU_ID)) {
+            if let Some(item) = item_kind.as_menuitem() {
+                item.set_accelerator(Some(shortcut))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn register_immersive_shortcut_handler(
+    app: &AppHandle,
+    shortcut: &str,
+) -> AppResult<()> {
+    let trimmed = shortcut.trim().to_string();
+    let (tx, rx) = mpsc::channel();
+    let callback_app = app.clone();
+
+    app.run_on_main_thread(move || {
+        let result = if trimmed.is_empty() {
+            services::hotkey::unregister_hotkey()
+        } else {
+            let app_for_callback = callback_app.clone();
+            let callback = Arc::new(move || {
+                let handle = app_for_callback.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(err) = commands::toggle_immersive_mode_from_menu(&handle) {
+                        eprintln!("[Shortcut] Failed to toggle immersive mode: {}", err);
+                    }
+                });
+            });
+            services::hotkey::register_hotkey(&trimmed, callback)
+        };
+
+        let _ = tx.send(result);
+    })
+    .map_err(|err| AppError::Settings(format!("Failed to schedule hotkey registration: {}", err)))?;
+
+    rx.recv()
+        .unwrap_or_else(|_| {
+            Err(AppError::Settings(
+                "Failed to finalize hotkey registration".into(),
+            ))
+        })
+}
+
+pub(crate) fn show_settings_window(app: &AppHandle) -> AppResult<()> {
+    if let Some(window) = app.get_webview_window("settings") {
+        window.show()?;
+        window.set_focus()?;
+        Ok(())
+    } else {
+        Err(AppError::Settings(
+            "Settings window is not registered in tauri.conf.json".into(),
+        ))
+    }
 }

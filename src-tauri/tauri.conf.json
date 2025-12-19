@@ -38,6 +38,19 @@
         "skipTaskbar": true,
         "visible": false,
         "visibleOnAllWorkspaces": true
+      },
+      {
+        "label": "settings",
+        "title": "Momentum Settings",
+        "width": 460,
+        "height": 360,
+        "decorations": true,
+        "alwaysOnTop": false,
+        "transparent": false,
+        "resizable": true,
+        "skipTaskbar": false,
+        "visible": false,
+        "visibleOnAllWorkspaces": false
       }
     ],
     "security": {

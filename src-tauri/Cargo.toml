@@ -32,4 +32,3 @@ core-foundation = "0.9"
 core-media = "0.2"
 block = "0.1"
 screencapturekit = "1.4"
-

@@ -1,8 +1,8 @@
 use crate::models::{RecordingOptions, AppSettings};
-use crate::error::AppResult;
-use crate::services::{recording::Recorder, camera::CameraPreview, settings};
+use crate::error::{AppError, AppResult};
+use crate::services::{recording::Recorder, camera::CameraPreview, settings, immersive::ImmersiveMode};
 use tauri::{AppHandle, Emitter, Manager, State};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 #[tauri::command]
 pub async fn start_recording(
@@ -10,6 +10,7 @@ pub async fn start_recording(
     recorder: State<'_, Mutex<Recorder>>,
     app: AppHandle,
     camera_preview: State<'_, Mutex<CameraPreview>>,
+    immersive_mode: State<'_, Arc<Mutex<ImmersiveMode>>>,
 ) -> AppResult<()> {
     println!("[Tauri Command] start_recording() called");
     
@@ -44,19 +45,9 @@ pub async fn start_recording(
     // Emit event immediately after starting recording to avoid UI delay
     app.emit("recording-started", ())?;
     
-    // Show camera overlay if camera is enabled
     if options.include_camera {
-        if let Some(window) = app.get_webview_window("camera-overlay") {
-            window.show()?;
-            {
-                let mut preview = camera_preview.lock().unwrap();
-                preview.set_app_handle(app.clone());
-                // Only start if not already running
-                if !preview.is_running() {
-                    preview.start()?;
-                }
-            }
-        }
+        let immersive = is_immersive_enabled(&immersive_mode);
+        apply_camera_overlay_visibility(&app, &camera_preview, true, immersive)?;
     }
     
     println!("[Tauri Command] start_recording() completed");
@@ -98,6 +89,7 @@ pub async fn stop_recording(
     recorder: State<'_, Mutex<Recorder>>,
     app: AppHandle,
     camera_preview: State<'_, Mutex<CameraPreview>>,
+    immersive_mode: State<'_, Arc<Mutex<ImmersiveMode>>>,
 ) -> AppResult<()> {
     println!("[Tauri Command] stop_recording() called");
     println!("[Tauri Command] Attempting to acquire recorder lock...");
@@ -158,19 +150,9 @@ pub async fn stop_recording(
     
     println!("[Tauri Command] Stopped recording. Screen file: {:?}, Audio file: {:?}", screen_file, audio_file);
     
-    // Check settings to determine if camera overlay should remain visible
-    let settings = settings::load_settings()?;
-    
-    // Only stop camera preview and hide overlay if camera is disabled in settings
-    if !settings.camera_enabled {
-        {
-            let preview = camera_preview.lock().unwrap();
-            let _ = preview.stop();
-        }
-        if let Some(window) = app.get_webview_window("camera-overlay") {
-            let _ = window.hide();
-        }
-    }
+    let camera_enabled = settings::load_settings()?.camera_enabled;
+    let immersive = is_immersive_enabled(&immersive_mode);
+    apply_camera_overlay_visibility(&app, &camera_preview, camera_enabled, immersive)?;
     
     // Emit stopped event immediately to unblock UI
     app.emit("recording-stopped", ())?;
@@ -301,25 +283,135 @@ pub async fn set_camera_overlay_visible(
     visible: bool,
     app: AppHandle,
     camera_preview: State<'_, Mutex<CameraPreview>>,
+    immersive_mode: State<'_, Arc<Mutex<ImmersiveMode>>>,
 ) -> AppResult<()> {
-    let window = app.get_webview_window("camera-overlay")
-        .ok_or_else(|| crate::error::AppError::Camera("Camera overlay window not found".to_string()))?;
-    
-    let mut preview = camera_preview.lock().unwrap();
-    
-    if visible {
-        // Show window and start camera stream
-        window.show()?;
-        preview.set_app_handle(app.clone());
-        preview.start()?;
-        println!("Camera overlay shown and camera stream started");
-    } else {
-        // Stop camera stream and hide window
-        preview.stop()?;
-        window.hide()?;
-        println!("Camera stream stopped and overlay hidden");
+    let immersive = is_immersive_enabled(&immersive_mode);
+    apply_camera_overlay_visibility(&app, &camera_preview, visible, immersive)
+}
+
+#[tauri::command]
+pub async fn set_immersive_mode(
+    enabled: bool,
+    app: AppHandle,
+    camera_preview: State<'_, Mutex<CameraPreview>>,
+    immersive_mode: State<'_, Arc<Mutex<ImmersiveMode>>>,
+) -> AppResult<()> {
+    apply_immersive_state(&app, &immersive_mode, enabled, &camera_preview)
+}
+
+#[tauri::command]
+pub async fn toggle_immersive_mode(
+    app: AppHandle,
+    camera_preview: State<'_, Mutex<CameraPreview>>,
+    immersive_mode: State<'_, Arc<Mutex<ImmersiveMode>>>,
+) -> AppResult<()> {
+    let next = !is_immersive_enabled(&immersive_mode);
+    apply_immersive_state(&app, &immersive_mode, next, &camera_preview)
+}
+
+pub(crate) fn toggle_immersive_mode_from_menu(app: &AppHandle) -> AppResult<()> {
+    let immersive_state = app.state::<Arc<Mutex<ImmersiveMode>>>();
+    let camera_preview = app.state::<Mutex<CameraPreview>>();
+    let next = !is_immersive_enabled(&immersive_state);
+    apply_immersive_state(app, &immersive_state, next, &camera_preview)
+}
+
+#[tauri::command]
+pub async fn update_immersive_shortcut(
+    shortcut: String,
+    app: AppHandle,
+) -> AppResult<()> {
+    let trimmed = shortcut.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::Settings("Shortcut cannot be empty".into()));
     }
-    
+
+    crate::update_toggle_menu_shortcut(&app, trimmed)?;
+    let mut current = settings::load_settings()?;
+    current.immersive_shortcut = trimmed.to_string();
+    settings::save_settings(&current)?;
+    crate::register_immersive_shortcut_handler(&app, trimmed)?;
+    app.emit(
+        "immersive-shortcut-updated",
+        serde_json::json!({ "shortcut": trimmed }),
+    )?;
+    Ok(())
+}
+
+fn is_immersive_enabled(state: &State<'_, Arc<Mutex<ImmersiveMode>>>) -> bool {
+    match state.lock() {
+        Ok(guard) => guard.is_enabled(),
+        Err(poisoned) => poisoned.into_inner().is_enabled(),
+    }
+}
+
+fn apply_camera_overlay_visibility(
+    app: &AppHandle,
+    camera_preview: &State<'_, Mutex<CameraPreview>>,
+    requested_visible: bool,
+    immersive_enabled: bool,
+) -> AppResult<()> {
+    let window = app
+        .get_webview_window("camera-overlay")
+        .ok_or_else(|| AppError::Camera("Camera overlay window not found".to_string()))?;
+
+    if requested_visible {
+        {
+            let mut preview = camera_preview.lock().unwrap();
+            preview.set_app_handle(app.clone());
+            if !preview.is_running() {
+                preview.start()?;
+                println!("Camera preview started");
+            }
+        }
+
+        if immersive_enabled {
+            window.hide()?;
+            println!("Camera overlay hidden (immersive mode)");
+        } else {
+            window.show()?;
+            println!("Camera overlay shown");
+        }
+    } else {
+        window.hide()?;
+        {
+            let preview = camera_preview.lock().unwrap();
+            if preview.is_running() {
+                let _ = preview.stop();
+                println!("Camera preview stopped");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn apply_immersive_state(
+    app: &AppHandle,
+    immersive_mode: &State<'_, Arc<Mutex<ImmersiveMode>>>,
+    enabled: bool,
+    camera_preview: &State<'_, Mutex<CameraPreview>>,
+) -> AppResult<()> {
+    {
+        let mut state = immersive_mode.lock().unwrap();
+        state.set_enabled(enabled);
+    }
+
+    if let Some(window) = app.get_webview_window("overlay") {
+        if enabled {
+            window.hide()?;
+        } else {
+            window.show()?;
+            window.set_focus().ok();
+        }
+    }
+
+    let camera_enabled = settings::load_settings()?.camera_enabled;
+    apply_camera_overlay_visibility(app, camera_preview, camera_enabled, enabled)?;
+
+    app.emit(
+        "immersive-mode-changed",
+        serde_json::json!({ "enabled": enabled }),
+    )?;
     Ok(())
 }
 

@@ -33,6 +33,14 @@ export const setCameraOverlayVisible = async (
   await invoke('set_camera_overlay_visible', { visible })
 }
 
+export const toggleImmersiveMode = async (): Promise<void> => {
+  await invoke('toggle_immersive_mode')
+}
+
+export const setImmersiveMode = async (enabled: boolean): Promise<void> => {
+  await invoke('set_immersive_mode', { enabled })
+}
+
 export const toggleMicrophoneDuringRecording = async (
   enabled: boolean
 ): Promise<void> => {
@@ -45,4 +53,10 @@ export const setMicMuted = async (muted: boolean): Promise<void> => {
 
 export const setSystemAudioMuted = async (muted: boolean): Promise<void> => {
   await invoke('set_system_audio_muted', { muted })
+}
+
+export const updateImmersiveShortcut = async (
+  shortcut: string
+): Promise<void> => {
+  await invoke('update_immersive_shortcut', { shortcut })
 }
