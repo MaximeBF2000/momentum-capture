@@ -10,6 +10,7 @@ pub(super) fn mux_final_video(
     output_path: &PathBuf,
     system_audio_sample_rate: Option<u32>,
     system_audio_channels: Option<u32>,
+    mic_audio_format: Option<(u32, u32)>,
 ) -> AppResult<()> {
     let mut cmd = Command::new("ffmpeg");
     cmd.args(["-y", "-hide_banner", "-loglevel", "warning"]);
@@ -37,7 +38,17 @@ pub(super) fn mux_final_video(
     // Input 2: Mic audio (if present)
     let has_mic_audio = mic_audio_path.map(|p| p.exists()).unwrap_or(false);
     if has_mic_audio {
-        cmd.args(["-i", mic_audio_path.unwrap().to_str().unwrap()]);
+        let (mic_rate, mic_channels) = mic_audio_format.unwrap_or((48_000, 1));
+        cmd.args([
+            "-f",
+            "s16le",
+            "-ar",
+            &mic_rate.to_string(),
+            "-ac",
+            &mic_channels.to_string(),
+            "-i",
+            mic_audio_path.unwrap().to_str().unwrap(),
+        ]);
     }
     
     // Mapping depends on what audio we have

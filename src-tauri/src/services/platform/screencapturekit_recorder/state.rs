@@ -28,6 +28,8 @@ pub(super) struct RecordingState {
     pub audio_frame_count: Arc<AtomicU64>,
     pub audio_samples_written: Arc<AtomicU64>,
     pub requested_fps: u32,
+    pub mic_sample_rate: Option<u32>,
+    pub mic_channel_count: Option<u32>,
 }
 
 pub fn is_recording_active() -> bool {

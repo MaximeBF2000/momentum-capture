@@ -2,6 +2,7 @@ use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use super::state;
 use screencapturekit::cv::CVPixelBufferLockFlags;
 use screencapturekit::prelude::*;
 
@@ -95,7 +96,7 @@ impl SCStreamOutputTrait for FrameHandler {
                             sample.duration(),
                         );
 
-                        let s16_data = if planar_layout {
+                        let mut s16_data = if planar_layout {
                             convert_planar_buffers(&planes)
                         } else {
                             convert_interleaved_buffers(&planes)
@@ -103,6 +104,10 @@ impl SCStreamOutputTrait for FrameHandler {
 
                         if s16_data.is_empty() {
                             return;
+                        }
+
+                        if state::system_audio_muted() {
+                            s16_data.iter_mut().for_each(|b| *b = 0);
                         }
 
                         if writer.write_all(&s16_data).is_ok() {

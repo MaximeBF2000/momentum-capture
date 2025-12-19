@@ -21,6 +21,8 @@ pub fn stop_recording() -> AppResult<PathBuf> {
     let mic_audio_path = state.mic_audio_path.clone();
     let system_audio_sample_rate = state.system_audio_sample_rate.load(Ordering::Relaxed);
     let system_audio_channel_count = state.system_audio_channel_count.load(Ordering::Relaxed);
+    let mic_sample_rate = state.mic_sample_rate;
+    let mic_channel_count = state.mic_channel_count;
     
     // STEP 1: Stop ScreenCaptureKit capture
     println!("[SCK] Stopping ScreenCaptureKit capture...");
@@ -140,6 +142,7 @@ pub fn stop_recording() -> AppResult<PathBuf> {
         } else {
             None
         },
+        mic_sample_rate.zip(mic_channel_count),
     );
     
     // Clean up temp files

@@ -1,3 +1,4 @@
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
@@ -9,7 +10,7 @@ use crate::error::{AppError, AppResult};
 use crate::services::platform::device_resolver;
 
 use super::frame_handler::FrameHandler;
-use super::state::{is_recording_active, set_state, RecordingState};
+use super::state::{self, is_recording_active, set_state, RecordingState};
 
 pub fn is_available() -> bool {
     // ScreenCaptureKit is available on macOS 12.3+
@@ -48,7 +49,7 @@ pub fn start_recording(output_path: &PathBuf, mic_enabled: bool) -> AppResult<()
     let session_id = uuid::Uuid::new_v4().to_string()[..8].to_string();
     let temp_video_path = temp_dir.join(format!("sck_video_{}.mp4", session_id));
     let system_audio_path = temp_dir.join(format!("sck_sysaudio_{}.raw", session_id));
-    let mic_audio_path = temp_dir.join(format!("sck_mic_{}.m4a", session_id));
+    let mic_audio_path = temp_dir.join(format!("sck_mic_{}.raw", session_id));
     
     println!("[SCK] Temp video: {:?}", temp_video_path);
     println!("[SCK] Temp system audio: {:?}", system_audio_path);
@@ -122,17 +123,24 @@ pub fn start_recording(output_path: &PathBuf, mic_enabled: bool) -> AppResult<()
     println!("[SCK] System audio file created");
     
     // === MIC RECORDING: Separate FFmpeg process ===
+    let mut mic_format: Option<(u32, u32)> = None;
     let mic_process = if mic_enabled {
         println!("[SCK] Starting mic recording...");
+        let mic_sample_rate = 48_000u32;
+        let mic_channel_count = 2u32;
+        let mic_writer = std::fs::File::create(&mic_audio_path)
+            .map_err(|e| AppError::Recording(format!("Failed to create mic audio file: {}", e)))?;
         let mut mic_cmd = Command::new("ffmpeg");
         mic_cmd.args([
             "-y", "-hide_banner", "-loglevel", "warning",
             "-f", "avfoundation",
             "-i", &format!(":{}", mic_index),
-            "-c:a", "aac", "-b:a", "128k"
+            "-ac", &mic_channel_count.to_string(),
+            "-ar", &mic_sample_rate.to_string(),
+            "-f", "s16le",
+            "-"
         ]);
-        mic_cmd.arg(mic_audio_path.to_str().unwrap());
-        mic_cmd.stdout(Stdio::null()).stderr(Stdio::piped());
+        mic_cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
         
         let mut mic_ffmpeg = mic_cmd.spawn()
             .map_err(|e| AppError::Recording(format!("Failed to start mic FFmpeg: {}", e)))?;
@@ -153,6 +161,41 @@ pub fn start_recording(output_path: &PathBuf, mic_enabled: bool) -> AppResult<()
                 }
             });
         }
+
+        if let Some(stdout) = mic_ffmpeg.stdout.take() {
+            let mut writer = std::io::BufWriter::new(mic_writer);
+            thread::spawn(move || {
+                let mut reader = stdout;
+                let mut buffer = vec![0u8; 8192];
+                loop {
+                    match reader.read(&mut buffer) {
+                        Ok(0) => {
+                            let _ = writer.flush();
+                            break;
+                        }
+                        Ok(len) => {
+                            if state::mic_muted() {
+                                buffer[..len].fill(0);
+                            }
+                            if let Err(err) = writer.write_all(&buffer[..len]) {
+                                eprintln!("[SCK] Mic writer error: {}", err);
+                                break;
+                            }
+                        }
+                        Err(err) => {
+                            eprintln!("[SCK] Mic reader error: {}", err);
+                            break;
+                        }
+                    }
+                }
+            });
+        } else {
+            return Err(AppError::Recording(
+                "Failed to capture mic stdout".to_string(),
+            ));
+        }
+
+        mic_format = Some((mic_sample_rate, mic_channel_count));
         Some(mic_ffmpeg)
     } else {
         None
@@ -233,6 +276,8 @@ pub fn start_recording(output_path: &PathBuf, mic_enabled: bool) -> AppResult<()
         audio_frame_count,
         audio_samples_written,
         requested_fps: 30,
+        mic_sample_rate: mic_format.map(|f| f.0),
+        mic_channel_count: mic_format.map(|f| f.1),
     });
     
     println!("[SCK] ✓ Recording started successfully");
