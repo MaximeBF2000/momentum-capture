@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -176,15 +177,23 @@ pub fn start_recording(output_path: &PathBuf, mic_enabled: bool) -> AppResult<()
     let mut stream = SCStream::new(&filter, &config);
     
     // Frame counters for debugging
-    let video_frame_count = Arc::new(std::sync::atomic::AtomicU64::new(0));
-    let audio_frame_count = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let video_frame_count = Arc::new(AtomicU64::new(0));
+    let audio_frame_count = Arc::new(AtomicU64::new(0));
+    let audio_samples_written = Arc::new(AtomicU64::new(0));
+    let system_audio_sample_rate = Arc::new(AtomicU32::new(0));
+    let system_audio_channel_count = Arc::new(AtomicU32::new(0));
+    let audio_layout_logged = Arc::new(AtomicBool::new(false));
     
     // Add video handler
     let handler = FrameHandler {
         video_writer: video_writer.clone(),
-        audio_writer: audio_writer.clone(),
+        audio_writer: Arc::new(Mutex::new(None)),
         video_frame_count: video_frame_count.clone(),
         audio_frame_count: audio_frame_count.clone(),
+        audio_sample_rate: system_audio_sample_rate.clone(),
+        audio_channel_count: system_audio_channel_count.clone(),
+        audio_layout_logged: audio_layout_logged.clone(),
+        audio_samples_written: audio_samples_written.clone(),
     };
     stream.add_output_handler(handler, SCStreamOutputType::Screen);
     
@@ -194,6 +203,10 @@ pub fn start_recording(output_path: &PathBuf, mic_enabled: bool) -> AppResult<()
         audio_writer: audio_writer.clone(),
         video_frame_count: video_frame_count.clone(),
         audio_frame_count: audio_frame_count.clone(),
+        audio_sample_rate: system_audio_sample_rate.clone(),
+        audio_channel_count: system_audio_channel_count.clone(),
+        audio_layout_logged: audio_layout_logged.clone(),
+        audio_samples_written: audio_samples_written.clone(),
     };
     stream.add_output_handler(audio_handler, SCStreamOutputType::Audio);
     
@@ -214,6 +227,12 @@ pub fn start_recording(output_path: &PathBuf, mic_enabled: bool) -> AppResult<()
         output_path: output_path.clone(),
         mic_process,
         mic_audio_path: if mic_enabled { Some(mic_audio_path) } else { None },
+        system_audio_sample_rate,
+        system_audio_channel_count,
+        video_frame_count,
+        audio_frame_count,
+        audio_samples_written,
+        requested_fps: 30,
     });
     
     println!("[SCK] ✓ Recording started successfully");

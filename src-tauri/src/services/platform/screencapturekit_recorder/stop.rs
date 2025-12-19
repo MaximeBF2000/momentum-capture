@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::Ordering;
 use std::thread;
 
 use crate::error::{AppError, AppResult};
@@ -18,6 +19,8 @@ pub fn stop_recording() -> AppResult<PathBuf> {
     let temp_video_path = state.temp_video_path.clone();
     let system_audio_path = state.system_audio_path.clone();
     let mic_audio_path = state.mic_audio_path.clone();
+    let system_audio_sample_rate = state.system_audio_sample_rate.load(Ordering::Relaxed);
+    let system_audio_channel_count = state.system_audio_channel_count.load(Ordering::Relaxed);
     
     // STEP 1: Stop ScreenCaptureKit capture
     println!("[SCK] Stopping ScreenCaptureKit capture...");
@@ -96,13 +99,47 @@ pub fn stop_recording() -> AppResult<PathBuf> {
         }
     }
     
+    let video_frames = state.video_frame_count.load(Ordering::Relaxed);
+    let audio_packets = state.audio_frame_count.load(Ordering::Relaxed);
+    let audio_samples = state.audio_samples_written.load(Ordering::Relaxed);
+    let approx_video_seconds = if state.requested_fps > 0 {
+        video_frames as f64 / state.requested_fps as f64
+    } else {
+        0.0
+    };
+    let approx_audio_seconds = if system_audio_sample_rate > 0 {
+        audio_samples as f64 / system_audio_sample_rate as f64
+    } else {
+        0.0
+    };
+    println!(
+        "[SCK] Frame stats: video={} (~{:.2}s @ {} fps), audio_packets={} samples={} (~{:.2}s @ {} Hz)",
+        video_frames,
+        approx_video_seconds,
+        state.requested_fps,
+        audio_packets,
+        audio_samples,
+        approx_audio_seconds,
+        system_audio_sample_rate
+    );
+    
     // STEP 6: Mux video + audio together
     println!("[SCK] Muxing video + audio...");
     let mux_result = mux_final_video(
         &temp_video_path,
         &system_audio_path,
         mic_audio_path.as_ref(),
-        &output_path
+        &output_path,
+        if system_audio_sample_rate > 0 {
+            Some(system_audio_sample_rate)
+        } else {
+            None
+        },
+        if system_audio_channel_count > 0 {
+            Some(system_audio_channel_count)
+        } else {
+            None
+        },
     );
     
     // Clean up temp files

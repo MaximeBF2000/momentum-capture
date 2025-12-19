@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::process::Child;
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use screencapturekit::prelude::SCStream;
 
@@ -22,6 +22,12 @@ pub(super) struct RecordingState {
     // Mic recording (separate FFmpeg process)
     pub mic_process: Option<Child>,
     pub mic_audio_path: Option<PathBuf>,
+    pub system_audio_sample_rate: Arc<AtomicU32>,
+    pub system_audio_channel_count: Arc<AtomicU32>,
+    pub video_frame_count: Arc<AtomicU64>,
+    pub audio_frame_count: Arc<AtomicU64>,
+    pub audio_samples_written: Arc<AtomicU64>,
+    pub requested_fps: u32,
 }
 
 pub fn is_recording_active() -> bool {
