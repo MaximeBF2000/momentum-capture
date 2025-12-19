@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "build-app": "rm -rf ~/Applications/Momentum.app && tccutil reset ScreenCapture com.maximebf.momentum && tccutil reset Camera com.maximebf.momentum && tccutil reset Microphone com.maximebf.momentum && rm -rf ./src-tauri/target && npm run tauri build"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

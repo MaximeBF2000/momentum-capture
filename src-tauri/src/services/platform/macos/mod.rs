@@ -1,5 +1,5 @@
 mod audio_recorder;
-mod ffmpeg;
+pub(crate) mod ffmpeg;
 mod muxed_recorder;
 mod screen_recorder;
 mod synchronized_recorder;

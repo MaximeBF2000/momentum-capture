@@ -2,18 +2,24 @@ use std::process::Command;
 
 /// Locate the FFmpeg binary on macOS, falling back to PATH.
 pub(crate) fn find_ffmpeg() -> String {
+    // Allow overriding via env var for custom installs packaged with the app
+    let mut possible_paths: Vec<String> = Vec::new();
+    if let Ok(custom_path) = std::env::var("FFMPEG_PATH") {
+        possible_paths.push(custom_path);
+    }
+
     // Try common macOS FFmpeg locations
-    let possible_paths = vec![
-        "ffmpeg", // System PATH
-        "/opt/homebrew/bin/ffmpeg", // Homebrew on Apple Silicon
-        "/usr/local/bin/ffmpeg", // Homebrew on Intel
-        "/usr/bin/ffmpeg", // System location
-    ];
+    possible_paths.extend([
+        "ffmpeg".to_string(),                   // System PATH
+        "/opt/homebrew/bin/ffmpeg".to_string(), // Homebrew on Apple Silicon
+        "/usr/local/bin/ffmpeg".to_string(),    // Homebrew on Intel
+        "/usr/bin/ffmpeg".to_string(),          // System location
+    ]);
     
     for path in possible_paths {
-        if Command::new(path).arg("-version").output().is_ok() {
+        if Command::new(&path).arg("-version").output().is_ok() {
             println!("[FFmpeg] Found FFmpeg at: {}", path);
-            return path.to_string();
+            return path;
         }
     }
     

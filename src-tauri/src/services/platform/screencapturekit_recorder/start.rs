@@ -5,9 +5,10 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use screencapturekit::prelude::*;
 use crate::error::{AppError, AppResult};
 use crate::services::platform::device_resolver;
+use crate::services::platform::macos::ffmpeg::find_ffmpeg;
+use screencapturekit::prelude::*;
 
 use super::frame_handler::FrameHandler;
 use super::state::{self, is_recording_active, set_state, RecordingState};
@@ -64,8 +65,11 @@ pub fn start_recording(output_path: &PathBuf, mic_enabled: bool) -> AppResult<()
         0
     };
     
+    // Locate FFmpeg binary explicitly (Finder-launched apps get a minimal PATH)
+    let ffmpeg_path = find_ffmpeg();
+
     // === PASS 1: VIDEO ONLY FFmpeg ===
-    let mut cmd = Command::new("ffmpeg");
+    let mut cmd = Command::new(&ffmpeg_path);
     cmd.args(["-y", "-hide_banner", "-loglevel", "warning"]);
     cmd.args([
         "-f", "rawvideo",
@@ -130,7 +134,7 @@ pub fn start_recording(output_path: &PathBuf, mic_enabled: bool) -> AppResult<()
         let mic_channel_count = 2u32;
         let mic_writer = std::fs::File::create(&mic_audio_path)
             .map_err(|e| AppError::Recording(format!("Failed to create mic audio file: {}", e)))?;
-        let mut mic_cmd = Command::new("ffmpeg");
+        let mut mic_cmd = Command::new(&ffmpeg_path);
         mic_cmd.args([
             "-y", "-hide_banner", "-loglevel", "warning",
             "-f", "avfoundation",

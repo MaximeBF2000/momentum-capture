@@ -72,7 +72,7 @@
       "minimumSystemVersion": "12.3",
       "exceptionDomain": "",
       "signingIdentity": null,
-      "entitlements": null,
+      "entitlements": "entitlements/momentum.entitlements",
       "infoPlist": "resources/Info.plist"
     }
   }

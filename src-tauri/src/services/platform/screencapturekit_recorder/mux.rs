@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use crate::error::{AppError, AppResult};
+use crate::services::platform::macos::ffmpeg::find_ffmpeg;
 
 pub(super) fn mux_final_video(
     video_path: &PathBuf,
@@ -12,7 +13,8 @@ pub(super) fn mux_final_video(
     system_audio_channels: Option<u32>,
     mic_audio_format: Option<(u32, u32)>,
 ) -> AppResult<()> {
-    let mut cmd = Command::new("ffmpeg");
+    let ffmpeg_path = find_ffmpeg();
+    let mut cmd = Command::new(&ffmpeg_path);
     cmd.args(["-y", "-hide_banner", "-loglevel", "warning"]);
     
     // Input 0: Video (mp4)
