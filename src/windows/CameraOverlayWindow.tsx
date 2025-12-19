@@ -10,7 +10,7 @@ export function CameraOverlayWindow() {
   return (
     <div className="w-full h-full bg-transparent flex items-center justify-center p-2">
       <div
-        className="w-full h-full rounded-full overflow-hidden bg-black shadow-lg aspect-square select-none"
+        className="w-full h-full rounded-full overflow-hidden bg-black aspect-square select-none"
         data-tauri-drag-region="true"
         style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
       >

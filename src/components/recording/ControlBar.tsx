@@ -198,7 +198,7 @@ export function ControlBar() {
           userSelect: 'none',
           WebkitUserSelect: 'none'
         }}
-        className="flex items-center gap-x-6 bg-neutral-900 backdrop-blur-md rounded-full border border-neutral-700/60 shadow-2xl select-none"
+        className="flex items-center gap-x-6 bg-neutral-900 backdrop-blur-md rounded-full border border-neutral-700/60 select-none"
         data-tauri-drag-region="true"
       >
         {/* Recording Indicator */}
