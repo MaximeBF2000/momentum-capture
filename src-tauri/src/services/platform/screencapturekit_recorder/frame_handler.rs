@@ -3,8 +3,12 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use super::state;
+use crate::services::camera;
+use crate::services::time::cm_time_to_ns;
 use screencapturekit::cv::CVPixelBufferLockFlags;
 use screencapturekit::prelude::*;
+
+static SCREEN_PTS_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 // Handler for ScreenCaptureKit callbacks
 pub(super) struct FrameHandler {
@@ -22,6 +26,16 @@ impl SCStreamOutputTrait for FrameHandler {
     fn did_output_sample_buffer(&self, sample: CMSampleBuffer, of_type: SCStreamOutputType) {
         match of_type {
             SCStreamOutputType::Screen => {
+                let screen_pts_ns = cm_time_to_ns(sample.presentation_timestamp());
+                let duration_ns = cm_time_to_ns(sample.duration());
+                let tick = SCREEN_PTS_COUNTER.fetch_add(1, Ordering::Relaxed) + 1;
+                if tick <= 5 || tick % 60 == 0 {
+                    println!(
+                        "[CameraSync] Screen frame #{} pts={}ns duration={}ns",
+                        tick, screen_pts_ns, duration_ns
+                    );
+                }
+                camera::emit_camera_frame_for_screen_pts(screen_pts_ns);
                 // Write video frame to FFmpeg stdin
                 if let Some(ref mut writer) = *self.video_writer.lock().unwrap() {
                     if let Some(buffer) = sample.image_buffer() {

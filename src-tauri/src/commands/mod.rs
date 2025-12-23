@@ -1,6 +1,6 @@
 use crate::models::{RecordingOptions, AppSettings};
 use crate::error::{AppError, AppResult};
-use crate::services::{recording::Recorder, camera::CameraPreview, settings, immersive::ImmersiveMode};
+use crate::services::{recording::Recorder, camera::{self, CameraPreview}, settings, immersive::ImmersiveMode};
 use tauri::{AppHandle, Emitter, Manager, State};
 use std::sync::{Arc, Mutex};
 
@@ -35,6 +35,7 @@ pub async fn start_recording(
     match start_result {
         Ok(_) => {
             println!("[Tauri Command] ✓ recorder.start() succeeded");
+            camera::set_camera_sync_enabled(options.include_camera);
         }
         Err(e) => {
             eprintln!("[Tauri Command] ✗ recorder.start() failed: {}", e);
@@ -140,6 +141,7 @@ pub async fn stop_recording(
     let (screen_file, audio_file) = match stop_result {
         Ok(files) => {
             println!("[Tauri Command] ✓ recorder.stop() succeeded");
+            camera::set_camera_sync_enabled(false);
             files
         }
         Err(e) => {
@@ -360,6 +362,7 @@ fn apply_camera_overlay_visibility(
             let mut preview = camera_preview.lock().unwrap();
             preview.set_app_handle(app.clone());
             if !preview.is_running() {
+                println!("[CameraSync] Camera overlay showing -> starting preview");
                 preview.start()?;
                 println!("Camera preview started");
             }
@@ -377,6 +380,7 @@ fn apply_camera_overlay_visibility(
         {
             let preview = camera_preview.lock().unwrap();
             if preview.is_running() {
+                println!("[CameraSync] Camera overlay hiding -> stopping preview");
                 let _ = preview.stop();
                 println!("Camera preview stopped");
             }
