@@ -3,6 +3,7 @@ use std::process::Command;
 
 use crate::error::{AppError, AppResult};
 use crate::services::platform::macos::ffmpeg::find_ffmpeg;
+use crate::services::MIC_VOLUME_GAIN;
 
 pub(super) fn mux_final_video(
     video_path: &PathBuf,
@@ -55,17 +56,52 @@ pub(super) fn mux_final_video(
     
     // Mapping depends on what audio we have
     cmd.args(["-map", "0:v"]); // Always map video
+
+    let limiter = "alimiter=limit=0.97";
+    let mic_gain_enabled = (MIC_VOLUME_GAIN - 1.0).abs() > f32::EPSILON;
     
     if has_system_audio && has_mic_audio {
-        // Mix both audio sources
-        cmd.args([
-            "-filter_complex", "[1:a][2:a]amix=inputs=2:duration=first[aout]",
-            "-map", "[aout]"
-        ]);
+        // Mix both audio sources with mic gain applied before amix
+        let mut filter_parts = Vec::new();
+        let mut mic_source_label = "2:a".to_string();
+        if mic_gain_enabled {
+            filter_parts.push(format!(
+                "[2:a]volume={:.2}[mic_gain];",
+                MIC_VOLUME_GAIN
+            ));
+            mic_source_label = "mic_gain".into();
+        }
+        filter_parts.push(format!(
+            "[1:a][{}]amix=inputs=2:duration=first:dropout_transition=3[mix];",
+            mic_source_label
+        ));
+        filter_parts.push(format!("[mix]{}[aout]", limiter));
+        let filter_complex = filter_parts.join("");
+        cmd.arg("-filter_complex");
+        cmd.arg(filter_complex);
+        cmd.args(["-map", "[aout]"]);
     } else if has_system_audio {
         cmd.args(["-map", "1:a"]);
     } else if has_mic_audio {
-        cmd.args(["-map", "1:a"]); // mic becomes input 1 if no system audio
+        // Mic only becomes input 1 when system audio is absent
+        let mut filter_parts = Vec::new();
+        let mic_input_label = "1:a";
+        let mut mic_source_label = mic_input_label.to_string();
+        if mic_gain_enabled {
+            filter_parts.push(format!(
+                "[{}]volume={:.2}[mic_gain];",
+                mic_input_label, MIC_VOLUME_GAIN
+            ));
+            mic_source_label = "mic_gain".into();
+        }
+        filter_parts.push(format!(
+            "[{}]{}[aout]",
+            mic_source_label, limiter
+        ));
+        let filter_complex = filter_parts.join("");
+        cmd.arg("-filter_complex");
+        cmd.arg(filter_complex);
+        cmd.args(["-map", "[aout]"]);
     } else {
         // No audio - just copy video
         cmd.args(["-c:v", "copy"]);
@@ -89,7 +125,11 @@ pub(super) fn mux_final_video(
     println!(
         "[SCK] Muxing: video + {} + {}{}",
         if has_system_audio { "system audio" } else { "no system audio" },
-        if has_mic_audio { "mic" } else { "no mic" },
+        if has_mic_audio {
+            format!("mic (gain x{:.2})", MIC_VOLUME_GAIN)
+        } else {
+            "no mic".to_string()
+        },
         if has_system_audio {
             format!(
                 " ({} Hz, {} ch)",

@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use crate::error::{AppError, AppResult};
 use crate::services::platform::{device_resolver, screencapturekit_recorder};
+use crate::services::MIC_VOLUME_GAIN;
 
 use super::ffmpeg::find_ffmpeg;
 
@@ -121,7 +122,13 @@ impl MuxedRecorder {
         println!("[MuxedRecorder] Configuring audio codec: AAC");
         if mic_enabled {
             // Single audio stream: microphone only
-            println!("[MuxedRecorder]   Audio: Mic only");
+            println!(
+                "[MuxedRecorder]   Audio: Mic only (gain x{:.2})",
+                MIC_VOLUME_GAIN
+            );
+            let filter = mic_enhancement_filter();
+            cmd.arg("-af");
+            cmd.arg(filter);
             cmd.args(&[
                 "-c:a", "aac",
                 "-b:a", "128k",
@@ -427,5 +434,13 @@ impl MuxedRecorder {
         }
         
         Ok(())
+    }
+}
+
+fn mic_enhancement_filter() -> String {
+    if (MIC_VOLUME_GAIN - 1.0).abs() < f32::EPSILON {
+        "alimiter=limit=0.97".to_string()
+    } else {
+        format!("volume={:.2},alimiter=limit=0.97", MIC_VOLUME_GAIN)
     }
 }
