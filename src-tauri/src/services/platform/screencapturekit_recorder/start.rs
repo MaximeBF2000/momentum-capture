@@ -24,6 +24,7 @@ pub fn start_recording(output_path: &PathBuf, mic_enabled: bool) -> AppResult<()
     // 2. Record system audio to temp WAV file - from SCK callbacks
     // 3. Record mic to temp file (if enabled) - separate FFmpeg process
     // 4. On stop: mux all together into final output
+    state::set_recording_paused(false);
     
     println!("[SCK] Starting recording (two-pass mode)...");
     println!("[SCK]   Final output: {:?}", output_path);
@@ -178,6 +179,9 @@ pub fn start_recording(output_path: &PathBuf, mic_enabled: bool) -> AppResult<()
                             break;
                         }
                         Ok(len) => {
+                            if state::recording_paused() {
+                                continue;
+                            }
                             if state::mic_muted() {
                                 buffer[..len].fill(0);
                             }

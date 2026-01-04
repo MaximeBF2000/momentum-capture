@@ -9,6 +9,7 @@ use screencapturekit::prelude::SCStream;
 pub(super) static STATE: Mutex<Option<RecordingState>> = Mutex::new(None);
 static MIC_MUTED: AtomicBool = AtomicBool::new(false);
 static SYSTEM_AUDIO_MUTED: AtomicBool = AtomicBool::new(false);
+static RECORDING_PAUSED: AtomicBool = AtomicBool::new(false);
 
 pub(super) struct RecordingState {
     pub ffmpeg_process: Child,
@@ -64,4 +65,15 @@ pub fn set_system_audio_muted(muted: bool) {
 
 pub fn system_audio_muted() -> bool {
     SYSTEM_AUDIO_MUTED.load(Ordering::Relaxed)
+}
+
+pub fn set_recording_paused(paused: bool) {
+    let old = RECORDING_PAUSED.swap(paused, Ordering::Relaxed);
+    if old != paused {
+        println!("[SCK] Recording pause state -> {}", paused);
+    }
+}
+
+pub fn recording_paused() -> bool {
+    RECORDING_PAUSED.load(Ordering::Relaxed)
 }

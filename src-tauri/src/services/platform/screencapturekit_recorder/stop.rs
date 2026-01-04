@@ -6,7 +6,7 @@ use std::thread;
 use crate::error::{AppError, AppResult};
 
 use super::mux::mux_final_video;
-use super::state::take_state;
+use super::state::{set_recording_paused, take_state};
 
 pub fn stop_recording() -> AppResult<PathBuf> {
     println!("[SCK] === STOP RECORDING START ===");
@@ -14,6 +14,7 @@ pub fn stop_recording() -> AppResult<PathBuf> {
     
     let mut state = take_state()
         .ok_or_else(|| AppError::Recording("No active recording".to_string()))?;
+    set_recording_paused(false);
     
     let output_path = state.output_path.clone();
     let temp_video_path = state.temp_video_path.clone();

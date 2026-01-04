@@ -96,8 +96,10 @@ impl Recorder {
             return Err(AppError::Recording("Recording already paused".to_string()));
         }
         state.is_paused = true;
-        // Note: ScreenCaptureKit doesn't support pause/resume natively
-        // Would need to stop and restart with concatenation
+        #[cfg(target_os = "macos")]
+        {
+            screencapturekit_recorder::set_recording_paused(true);
+        }
         Ok(())
     }
 
@@ -110,6 +112,10 @@ impl Recorder {
             return Err(AppError::Recording("Recording is not paused".to_string()));
         }
         state.is_paused = false;
+        #[cfg(target_os = "macos")]
+        {
+            screencapturekit_recorder::set_recording_paused(false);
+        }
         Ok(())
     }
 
@@ -140,6 +146,7 @@ impl Recorder {
             match result {
                 Ok(path) => {
                     println!("[Recorder] ✓ Recording stopped: {:?}", path);
+                    screencapturekit_recorder::set_recording_paused(false);
                     // Return same path for both (audio is embedded in MP4)
                     Ok((path.clone(), path))
                 }

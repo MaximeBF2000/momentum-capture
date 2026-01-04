@@ -36,6 +36,9 @@ impl SCStreamOutputTrait for FrameHandler {
                     );
                 }
                 camera::emit_camera_frame_for_screen_pts(screen_pts_ns);
+                if state::recording_paused() {
+                    return;
+                }
                 // Write video frame to FFmpeg stdin
                 if let Some(ref mut writer) = *self.video_writer.lock().unwrap() {
                     if let Some(buffer) = sample.image_buffer() {
@@ -55,9 +58,12 @@ impl SCStreamOutputTrait for FrameHandler {
             }
             SCStreamOutputType::Audio => {
                 // Write audio to named pipe (convert Float32 to s16le)
+                self.capture_audio_metadata(&sample);
+                if state::recording_paused() {
+                    return;
+                }
                 let mut writer_guard = self.audio_writer.lock().unwrap();
                 if let Some(ref mut writer) = *writer_guard {
-                    self.capture_audio_metadata(&sample);
                     if let Some(audio_buffers) = sample.audio_buffer_list() {
                         let planes: Vec<AudioPlane<'_>> = audio_buffers
                             .iter()
