@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Momentum - Native macOS Screen Recording</title>
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                    colors: {
+                        mac: {
+                            bg: '#050505',
+                            surface: '#1c1c1e',
+                            surfaceHighlight: '#2c2c2e',
+                            blue: '#0A84FF',
+                            text: '#F5F5F7',
+                            subtext: '#86868b',
+                        }
+                    },
+                    animation: {
+                        'float-slow': 'float 8s ease-in-out infinite',
+                        'float-medium': 'float 6s ease-in-out infinite',
+                        'float-fast': 'float 4s ease-in-out infinite',
+                        'pulse-slow': 'pulse 4s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                        'fade-in-up': 'fadeInUp 0.8s ease-out forwards',
+                        'aurora': 'aurora 10s linear infinite alternate',
+                    },
+                    keyframes: {
+                        float: {
+                            '0%, 100%': { transform: 'translateY(0) rotate(0deg)' },
+                            '50%': { transform: 'translateY(-20px) rotate(2deg)' },
+                        },
+                        fadeInUp: {
+                            '0%': { opacity: '0', transform: 'translateY(20px)' },
+                            '100%': { opacity: '1', transform: 'translateY(0)' },
+                        },
+                        aurora: {
+                            '0%': { backgroundPosition: '0% 50%' },
+                            '100%': { backgroundPosition: '100% 50%' },
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        /* Glassmorphism Utilities */
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+        }
+
+        /* The Hero Grid Background */
+        .hero-grid {
+            background-size: 50px 50px;
+            background-image: 
+                linear-gradient(to right, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(to bottom, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+            mask-image: radial-gradient(circle at center, black 30%, transparent 80%);
+            transform: perspective(1000px) rotateX(20deg) scale(1.2);
+            transform-origin: top center;
+        }
+
+        /* Aurora Gradient Mesh */
+        .aurora-bg {
+            background: 
+                radial-gradient(at 0% 0%, rgba(56, 189, 248, 0.15) 0px, transparent 50%),
+                radial-gradient(at 100% 0%, rgba(168, 85, 247, 0.15) 0px, transparent 50%),
+                radial-gradient(at 100% 100%, rgba(236, 72, 153, 0.05) 0px, transparent 50%);
+            filter: blur(80px);
+        }
+
+        /* Clean Scrollbar */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #050505; }
+        ::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
+        
+        .text-gradient {
+            background: linear-gradient(135deg, #FFFFFF 0%, #9ca3af 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+    </style>
+</head>
+<body class="bg-mac-bg text-mac-text font-sans antialiased overflow-x-hidden selection:bg-mac-blue selection:text-white">
+
+    <nav class="fixed top-0 w-full z-50 transition-all duration-300 border-b border-white/5 bg-black/60 backdrop-blur-xl">
+        <div class="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+            <div class="flex items-center gap-2">
+                <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-gray-700 to-black border border-white/10 flex items-center justify-center">
+                    <div class="w-3 h-3 bg-red-500 rounded-full shadow-[0_0_10px_rgba(239,68,68,0.5)]"></div>
+                </div>
+                <span class="font-semibold text-lg tracking-tight">Momentum</span>
+            </div>
+            
+            <div class="hidden md:flex items-center gap-8 text-sm font-medium text-mac-subtext">
+                <a href="#features" class="hover:text-white transition-colors">Features</a>
+                <a href="#specs" class="hover:text-white transition-colors">Specs</a>
+                <a href="#faq" class="hover:text-white transition-colors">FAQ</a>
+            </div>
+
+            <a href="#" class="hidden md:flex items-center gap-2 bg-white text-black px-4 py-2 rounded-full text-sm font-semibold hover:bg-gray-200 transition-all transform hover:scale-105">
+                <span>Download</span>
+                <span class="opacity-60 font-normal">v1.0</span>
+            </a>
+        </div>
+    </nav>
+
+    <header class="relative w-full min-h-screen flex flex-col pt-32 overflow-hidden">
+        
+        <div class="absolute inset-0 z-0">
+            <div class="absolute inset-0 aurora-bg opacity-60 animate-pulse-slow"></div>
+            <div class="absolute inset-0 top-[20%] hero-grid opacity-50 pointer-events-none"></div>
+        </div>
+
+        <div class="absolute inset-0 z-0 pointer-events-none overflow-hidden select-none">
+            <div class="absolute top-[15%] left-[10%] w-24 h-24 glass-panel rounded-2xl opacity-40 rotate-12 animate-float-slow flex items-center justify-center">
+                <i class="ph-fill ph-file-video text-4xl text-white/20"></i>
+            </div>
+            <div class="absolute bottom-[30%] right-[10%] w-32 h-32 glass-panel rounded-full opacity-30 -rotate-6 animate-float-medium flex items-center justify-center" style="animation-delay: 1s;">
+                <i class="ph-fill ph-waveform text-5xl text-white/20"></i>
+            </div>
+            <div class="absolute top-[40%] left-[20%] w-16 h-16 bg-blue-500/10 rounded-xl blur-xl animate-float-fast"></div>
+        </div>
+
+        <div class="relative z-10 max-w-4xl mx-auto text-center px-6">
+            
+            <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-white/10 bg-white/5 backdrop-blur-sm text-xs font-medium text-gray-300 mb-8 animate-fade-in-up" style="animation-delay: 0.1s;">
+                <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+                <span>Native macOS Application</span>
+            </div>
+
+            <h1 class="text-5xl md:text-8xl font-bold tracking-tight mb-6 animate-fade-in-up leading-[1.1]" style="animation-delay: 0.2s;">
+                Screen recording.<br />
+                <span class="text-gradient">Purely native.</span>
+            </h1>
+
+            <p class="text-xl md:text-2xl text-mac-subtext mb-10 max-w-2xl mx-auto leading-relaxed animate-fade-in-up" style="animation-delay: 0.3s;">
+                Speed, simplicity, and privacy. <br class="hidden md:block">
+                No cloud. No subscription. No setup.
+            </p>
+
+            <div class="flex flex-col md:flex-row items-center justify-center gap-4 mb-20 animate-fade-in-up" style="animation-delay: 0.4s;">
+                <a href="#" class="w-full md:w-auto px-8 py-4 bg-white text-black rounded-full font-semibold text-lg hover:bg-gray-200 transition-all shadow-[0_0_50px_rgba(255,255,255,0.15)] hover:shadow-[0_0_60px_rgba(255,255,255,0.3)]">
+                    Get Momentum
+                    <span class="ml-2 text-gray-500 font-normal">€14.99</span>
+                </a>
+                <span class="text-sm text-mac-subtext">One-time payment</span>
+            </div>
+        </div>
+
+        <div class="relative flex-grow w-full max-w-6xl mx-auto px-4 animate-fade-in-up" style="animation-delay: 0.6s;">
+            <div class="relative w-full h-[500px] md:h-[700px]">
+                
+                <div class="absolute inset-x-0 md:inset-x-12 top-0 bottom-0 bg-[#0f0f10] rounded-t-3xl border border-white/10 shadow-2xl overflow-hidden">
+                    <div class="h-10 bg-white/5 border-b border-white/5 flex items-center px-4 gap-2">
+                        <div class="w-3 h-3 rounded-full bg-[#FF5F57]"></div>
+                        <div class="w-3 h-3 rounded-full bg-[#FEBC2E]"></div>
+                        <div class="w-3 h-3 rounded-full bg-[#28C840]"></div>
+                    </div>
+                    <div class="p-12 flex justify-center items-center h-full opacity-30 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')]">
+                        <div class="text-center space-y-4">
+                            <div class="w-64 h-4 bg-white/10 rounded mx-auto"></div>
+                            <div class="w-48 h-4 bg-white/10 rounded mx-auto"></div>
+                            <div class="w-56 h-4 bg-white/10 rounded mx-auto"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="absolute top-[25%] left-1/2 -translate-x-1/2 w-[340px] md:w-[420px] h-[72px] bg-[#1a1a1a]/80 backdrop-blur-2xl border border-white/10 rounded-full shadow-[0_20px_60px_rgba(0,0,0,0.5)] flex items-center justify-between px-3 animate-float-slow z-30">
+                    <div class="flex items-center gap-2 pl-5 border-r border-white/10 pr-5 h-10">
+                        <div class="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse"></div>
+                        <span class="text-sm font-mono text-gray-200 tracking-wider">00:04:21</span>
+                    </div>
+                    <div class="flex items-center gap-2 pr-2">
+                        <button class="w-11 h-11 rounded-full hover:bg-white/10 flex items-center justify-center text-white transition-colors group relative">
+                            <i class="ph-fill ph-pause text-lg"></i>
+                            <span class="absolute -bottom-8 bg-black border border-white/10 px-2 py-1 rounded text-[10px] opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">Pause</span>
+                        </button>
+                        <button class="w-12 h-12 rounded-full bg-white text-black flex items-center justify-center hover:scale-105 transition-transform shadow-lg group relative">
+                            <i class="ph-fill ph-stop text-xl"></i>
+                            <span class="absolute -bottom-8 bg-black text-white border border-white/10 px-2 py-1 rounded text-[10px] opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">Stop Recording</span>
+                        </button>
+                        <button class="w-11 h-11 rounded-full hover:bg-white/10 flex items-center justify-center text-white transition-colors relative">
+                            <i class="ph-fill ph-microphone text-lg"></i>
+                            <div class="absolute top-3 right-3 w-1.5 h-1.5 bg-green-500 rounded-full border border-black"></div>
+                        </button>
+                        <button class="w-11 h-11 rounded-full hover:bg-white/10 flex items-center justify-center text-white transition-colors">
+                            <i class="ph-fill ph-video-camera text-lg"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="absolute bottom-[20%] right-[8%] md:right-[15%] w-32 h-32 md:w-56 md:h-56 rounded-full border-[6px] border-white/20 overflow-hidden shadow-2xl z-40 animate-float-medium" style="animation-delay: 1.5s;">
+                    <img src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?ixlib=rb-1.2.1&auto=format&fit=crop&w=800&q=80" alt="User Webcam" class="w-full h-full object-cover">
+                    <div class="absolute bottom-6 left-1/2 -translate-x-1/2 bg-black/50 backdrop-blur px-3 py-1 rounded-full border border-white/10 flex items-center gap-1.5">
+                        <div class="w-1.5 h-4 rounded-full bg-green-500 flex items-end justify-center overflow-hidden">
+                            <div class="w-full bg-white animate-[bounce_1s_infinite] h-full"></div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </header>
+
+    <section id="features" class="relative z-10 py-24 px-6 max-w-7xl mx-auto -mt-20">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 auto-rows-[320px]">
+            
+            <div class="md:col-span-2 glass-panel rounded-3xl p-10 flex flex-col justify-between relative overflow-hidden group hover:border-white/20 transition-colors">
+                <div class="absolute right-0 top-0 w-64 h-64 bg-gradient-to-br from-orange-500/10 to-transparent rounded-bl-full pointer-events-none"></div>
+                
+                <div class="z-10">
+                    <div class="w-14 h-14 rounded-2xl bg-orange-500/20 text-orange-500 flex items-center justify-center mb-6">
+                        <i class="ph-fill ph-lightning text-3xl"></i>
+                    </div>
+                    <h3 class="text-3xl font-semibold text-white mb-3">Instant Native Performance</h3>
+                    <p class="text-mac-subtext text-lg max-w-md">Engineered for pure speed. Momentum runs entirely on-device with zero latency and negligible CPU usage. It feels instantaneous.</p>
+                </div>
+                
+                <div class="flex items-center gap-2 mt-auto">
+                    <div class="font-mono text-xs text-orange-400 bg-orange-500/10 border border-orange-500/20 rounded-md px-3 py-1.5">
+                        < 1% CPU Usage
+                    </div>
+                    <div class="font-mono text-xs text-gray-400 bg-white/5 border border-white/10 rounded-md px-3 py-1.5">
+                        60 FPS
+                    </div>
+                </div>
+            </div>
+
+            <div class="row-span-2 glass-panel rounded-3xl p-8 flex flex-col relative overflow-hidden group hover:border-white/20 transition-colors">
+                <div class="absolute inset-0 bg-gradient-to-b from-transparent to-blue-900/10"></div>
+                <div class="w-14 h-14 rounded-2xl bg-blue-500/20 text-blue-400 flex items-center justify-center mb-6 z-10">
+                    <i class="ph-fill ph-lock-key text-3xl"></i>
+                </div>
+                <h3 class="text-3xl font-semibold text-white mb-3 z-10">Your Data.<br>Your Drive.</h3>
+                <p class="text-mac-subtext mb-8 z-10 text-lg">Recordings are saved directly to your Downloads folder as MP4s. No uploads, no cloud processing, no waiting.</p>
+                
+                <div class="mt-auto bg-[#2c2c2e] rounded-t-xl p-4 border border-white/10 translate-y-4 group-hover:translate-y-2 transition-transform duration-300 shadow-2xl">
+                    <div class="flex items-center gap-3 mb-3 pb-3 border-b border-white/5">
+                        <i class="ph-fill ph-folder text-blue-400 text-xl"></i>
+                        <span class="text-sm font-medium">Downloads</span>
+                    </div>
+                    <div class="space-y-3">
+                        <div class="flex items-center gap-3 text-xs text-gray-300 p-2 rounded hover:bg-white/5">
+                            <i class="ph-fill ph-file-video text-blue-400"></i> 
+                            <span>Screen Recording 2024...mp4</span>
+                            <span class="ml-auto text-gray-500">14.2 MB</span>
+                        </div>
+                        <div class="flex items-center gap-3 text-xs text-gray-300 p-2 rounded hover:bg-white/5">
+                            <i class="ph-fill ph-file-video text-blue-400"></i> 
+                            <span>Bug_Report_Linear.mp4</span>
+                            <span class="ml-auto text-gray-500">4.1 MB</span>
+                        </div>
+                        <div class="flex items-center gap-3 text-xs text-white bg-green-500/10 border border-green-500/20 p-2 rounded">
+                            <i class="ph-fill ph-check-circle text-green-500"></i> 
+                            <span>Saved Instantly</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="glass-panel rounded-3xl p-10 flex flex-col justify-between group hover:border-white/20 transition-colors">
+                <div>
+                    <div class="w-14 h-14 rounded-2xl bg-purple-500/20 text-purple-400 flex items-center justify-center mb-6">
+                        <i class="ph-fill ph-eye-slash text-3xl"></i>
+                    </div>
+                    <h3 class="text-2xl font-semibold text-white mb-2">Immersive Mode</h3>
+                    <p class="text-mac-subtext">Toggle with <span class="bg-white/10 px-1.5 py-0.5 rounded text-white font-mono border border-white/10">⌥ + I</span> to hide all overlays and record a clean feed.</p>
+                </div>
+            </div>
+
+            <div class="glass-panel rounded-3xl p-10 flex flex-col justify-center items-center text-center group border border-white/10 hover:border-green-500/40 transition-all bg-gradient-to-b from-transparent to-green-900/5">
+                <div class="text-5xl font-bold text-white mb-2 tracking-tight">€14.99</div>
+                <div class="text-green-400 font-medium mb-4 flex items-center gap-2">
+                    <i class="ph-fill ph-check"></i> One-time payment
+                </div>
+                <p class="text-mac-subtext text-sm mb-6">Own the tool forever.<br>No monthly fees.</p>
+                <a href="#" class="w-full px-6 py-3 bg-white text-black rounded-full text-sm font-bold hover:scale-105 transition-transform shadow-lg">Buy Now</a>
+            </div>
+
+        </div>
+    </section>
+
+    <section id="specs" class="py-24 border-t border-white/5 bg-black/40">
+        <div class="max-w-4xl mx-auto px-6">
+            <h3 class="text-sm font-semibold text-gray-500 uppercase tracking-widest mb-12">Technical Specifications</h3>
+            
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-8">
+                <div class="space-y-2">
+                    <span class="text-gray-500 text-sm">Output Format</span>
+                    <p class="text-white font-medium flex items-center gap-2">
+                        <i class="ph-fill ph-file-video text-gray-400"></i> MP4 (H.264)
+                    </p>
+                </div>
+                <div class="space-y-2">
+                    <span class="text-gray-500 text-sm">Audio Source</span>
+                    <p class="text-white font-medium">System + Mic</p>
+                </div>
+                <div class="space-y-2">
+                    <span class="text-gray-500 text-sm">Processing</span>
+                    <p class="text-white font-medium">100% Local</p>
+                </div>
+                <div class="space-y-2">
+                    <span class="text-gray-500 text-sm">Compatibility</span>
+                    <p class="text-white font-medium">Apple Silicon & Intel</p>
+                </div>
+            </div>
+            
+            <div class="mt-16 p-8 rounded-2xl bg-gradient-to-r from-gray-900 to-black border border-white/10 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+                <div>
+                    <h4 class="text-white font-semibold mb-1 text-lg">Privacy Guarantee</h4>
+                    <p class="text-gray-400 text-sm max-w-md">Momentum has no servers, no analytics, and no way to view your recordings. Everything stays on your Mac.</p>
+                </div>
+                <div class="flex gap-4 text-gray-600">
+                    <i class="ph-fill ph-shield-check text-3xl"></i>
+                    <i class="ph-fill ph-wifi-slash text-3xl"></i>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <footer class="py-12 border-t border-white/5 text-center md:text-left bg-black">
+        <div class="max-w-7xl mx-auto px-6 flex flex-col md:flex-row justify-between items-center gap-6">
+            <div class="flex flex-col gap-2">
+                <span class="font-semibold text-white">Momentum</span>
+                <span class="text-sm text-gray-600">&copy; 2024. Native macOS Recording.</span>
+            </div>
+            
+            <div class="flex gap-8 text-sm text-gray-500">
+                <a href="#" class="hover:text-white transition-colors">Contact Support</a>
+                <a href="#" class="hover:text-white transition-colors">Twitter</a>
+            </div>
+        </div>
+    </footer>
+
+</body>
+</html>
