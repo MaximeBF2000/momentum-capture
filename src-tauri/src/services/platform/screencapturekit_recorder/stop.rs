@@ -29,6 +29,11 @@ pub fn stop_recording(
     let mic_audio_path = state.mic_audio_path.clone();
     let system_audio_sample_rate = state.system_audio_sample_rate.load(Ordering::Relaxed);
     let system_audio_channel_count = state.system_audio_channel_count.load(Ordering::Relaxed);
+    let system_audio_samples = state.audio_samples_written.load(Ordering::Relaxed);
+    let mic_audio_samples = state.mic_samples_written.load(Ordering::Relaxed);
+    let first_screen_arrival_ns = state.first_screen_frame_arrival_ns.load(Ordering::Relaxed);
+    let first_system_audio_arrival_ns = state.first_system_audio_arrival_ns.load(Ordering::Relaxed);
+    let first_mic_audio_arrival_ns = state.first_mic_audio_arrival_ns.load(Ordering::Relaxed);
     let mic_sample_rate = state.mic_sample_rate;
     let mic_channel_count = state.mic_channel_count;
 
@@ -117,7 +122,7 @@ pub fn stop_recording(
 
     let video_frames = state.video_frame_count.load(Ordering::Relaxed);
     let audio_packets = state.audio_frame_count.load(Ordering::Relaxed);
-    let audio_samples = state.audio_samples_written.load(Ordering::Relaxed);
+    let audio_samples = system_audio_samples;
     let approx_video_seconds = if state.requested_fps > 0 {
         video_frames as f64 / state.requested_fps as f64
     } else {
@@ -138,6 +143,26 @@ pub fn stop_recording(
         approx_audio_seconds,
         system_audio_sample_rate
     );
+    let capture_elapsed_ms = state.capture_started_at.elapsed().as_millis();
+    println!(
+        "[SCK] Timeline markers (from recorder start): screen={}ms system={}ms mic={}ms total={}ms",
+        first_screen_arrival_ns / 1_000_000,
+        first_system_audio_arrival_ns / 1_000_000,
+        first_mic_audio_arrival_ns / 1_000_000,
+        capture_elapsed_ms
+    );
+
+    let audio_anchor_ns = first_screen_arrival_ns;
+    let system_audio_offset_seconds = if audio_anchor_ns > 0 && first_system_audio_arrival_ns > 0 {
+        Some((first_system_audio_arrival_ns as f64 - audio_anchor_ns as f64) / 1_000_000_000.0)
+    } else {
+        None
+    };
+    let mic_audio_offset_seconds = if audio_anchor_ns > 0 && first_mic_audio_arrival_ns > 0 {
+        Some((first_mic_audio_arrival_ns as f64 - audio_anchor_ns as f64) / 1_000_000_000.0)
+    } else {
+        None
+    };
 
     // STEP 6: Mux video + audio together
     println!("[SCK] Muxing video + audio...");
@@ -157,6 +182,11 @@ pub fn stop_recording(
             None
         },
         mic_sample_rate.zip(mic_channel_count),
+        system_audio_samples,
+        mic_audio_samples,
+        approx_video_seconds,
+        system_audio_offset_seconds,
+        mic_audio_offset_seconds,
         &state.ffmpeg_path,
     );
 

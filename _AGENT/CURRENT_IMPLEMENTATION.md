@@ -100,27 +100,27 @@ ffmpeg -f rawvideo -pix_fmt bgra -s WIDTHxHEIGHT -r 30 -i pipe:0 \
 **FFmpeg Command**:
 
 ```bash
-ffmpeg -f avfoundation -i :{mic_index} -c:a aac -b:a 128k temp_mic.m4a
+ffmpeg -f avfoundation -i :{mic_index} -ac 2 -ar 48000 -f s16le -
 ```
 
 **Data Flow**:
 
 1. FFmpeg captures microphone audio directly
-2. Encodes to AAC format
-3. Saves to temp M4A file
+2. Outputs raw PCM `s16le` to stdout
+3. Rust thread writes bytes to `sck_mic_<session>.raw`
 4. Process runs until recording stops (killed via SIGINT)
 
 **Mute Control**:
 
-- **NOT applied during capture** - mic is always captured
-- Mute is applied during **muxing phase** (post-processing)
-- When muted, FFmpeg volume filter sets gain to 0.0 during muxing
+- Applied live in Rust mic writer thread
+- When muted, captured PCM chunk is zeroed before writing
+- Mux still supports optional mic gain filter (`MIC_VOLUME_GAIN`)
 
 **Key Characteristics**:
 
 - Independent process with its own timeline
 - No synchronization with screen video or system audio during capture
-- Mute state stored in `AtomicBool MIC_MUTED` but only used during muxing
+- Mute state stored in `AtomicBool MIC_MUTED` and applied during capture
 
 ---
 
@@ -203,7 +203,7 @@ When `stop_recording()` is called:
 ### Step 1: Stop Capture
 
 - Stop ScreenCaptureKit stream
-- Wait 500ms for callbacks to finish
+- Wait ~100ms for callbacks to flush
 - Flush and close all writers
 
 ### Step 2: Wait for Processes
@@ -218,8 +218,8 @@ When `stop_recording()` is called:
 ```bash
 ffmpeg -i temp_video.mp4 \
   -f s16le -ar 48000 -ac 2 -i temp_system_audio.raw \
-  -i temp_mic.m4a \
-  -filter_complex "[1:a]volume={sys_gain}[sys];[2:a]volume={mic_gain}[mic];[sys][mic]amix=inputs=2:duration=shortest:normalize=0[aout]" \
+  -f s16le -ar 48000 -ac 2 -i temp_mic.raw \
+  -filter_complex "<offset alignment + optional mic atempo + amix + async resample + trim>" \
   -map 0:v -map "[aout]" \
   -c:v copy -c:a aac -b:a 128k -shortest \
   -movflags +faststart output.mp4
@@ -227,16 +227,16 @@ ffmpeg -i temp_video.mp4 \
 
 **Mute Application**:
 
-- System audio gain: `1.5` if unmuted, `0.0` if muted
-- Mic gain: `1.0` if unmuted, `0.0` if muted
-- Both gains applied via FFmpeg volume filters
-- Audio streams mixed with `amix` filter
+- System mute: already applied during capture (zeroed PCM)
+- Mic mute: already applied during capture (zeroed PCM)
+- Optional mic gain still applied by FFmpeg volume filter
+- Mux filter applies timeline alignment and drift correction before final mix
 
 **Key Points**:
 
 - Video is copied (no re-encoding)
 - Audio is re-encoded to AAC
-- `-shortest` flag ensures output stops when video ends
+- Audio timeline is trimmed to video duration in filter graph
 - Final file: Single MP4 with video + mixed audio track
 
 ---
@@ -245,34 +245,46 @@ ffmpeg -i temp_video.mp4 \
 
 ### Current Synchronization Approach
 
-**Timeline Management**: **None** - relies on FFmpeg's automatic synchronization
+**Timeline Management**: **Hybrid**
+
+- Screen video is the timeline anchor.
+- System audio and mic audio start offsets are measured at runtime (first-arrival timestamps).
+- Mic drift is estimated from sample counts vs video duration and corrected in mux.
 
 **How It Works**:
 
-1. Screen video: Encoded with 30 FPS frame rate (implicit timeline)
-2. System audio: Raw PCM file, duration calculated from file size
-3. Mic audio: AAC file with its own timeline
-4. FFmpeg muxing: Uses `-shortest` to align streams, but no explicit timestamp alignment
+1. Screen video: Encoded at 30 FPS from ScreenCaptureKit callbacks.
+2. System audio: Captured from ScreenCaptureKit callbacks into raw PCM.
+3. Mic audio: Captured by separate FFmpeg avfoundation process into raw PCM.
+4. Recorder tracks:
+   - first screen frame arrival
+   - first system-audio arrival
+   - first mic-audio arrival
+   - written sample counts for system + mic
+5. FFmpeg muxing uses:
+   - per-track alignment (`adelay` or `atrim+asetpts`) from measured offsets
+   - optional mic `atempo` chain based on measured duration ratio
+   - `aresample=async=1000:first_pts=0`
+   - `atrim=duration=<video_duration>`
 
 ### Synchronization Issues
 
-1. **No Master Timeline**: Each stream has its own implicit timeline
-2. **No Timestamp Normalization**: No `t0` reference point established
-3. **Drift Risk**: Different capture processes may have slight clock differences
-4. **Mic Audio**: Captured independently, may drift relative to system audio
-5. **Webcam**: Not captured, so no sync concerns (but also not composited)
+1. **Mic clock is still independent**: correction is post-capture during mux, not true single-clock capture.
+2. **Offset measurement is callback-arrival based**: it is accurate enough for practical sync, but not sample-accurate device timestamp alignment.
+3. **Camera path has its own rendering latency**: webcam appears in screen capture because overlay is captured, but camera decode/render latency can vary.
 
 ### What Works
 
-- System audio and screen video come from same ScreenCaptureKit stream, so they're naturally synchronized
-- FFmpeg's `-shortest` flag ensures output duration matches shortest input
-- Muxing generally produces acceptable results for typical recording durations
+- System audio and screen video are naturally close (same ScreenCaptureKit stream).
+- Mic starts are now aligned to video using measured offsets.
+- Long-recording mic drift is compensated by tempo correction when detected.
+- Final mux enforces a stable output timeline trimmed to video duration.
 
 ### What Doesn't Work
 
-- Mic audio may drift over long recordings
-- No guarantee of frame-accurate sync
-- Webcam overlay not synced with anything (not even captured)
+- This is not a true single-pass compositor/writer architecture.
+- Perfect sample-accurate sync across all inputs is not guaranteed yet.
+- Webcam is still preview-driven (captured through overlay-in-screen), not an independently muxed track.
 
 ---
 
@@ -289,13 +301,12 @@ ffmpeg -i temp_video.mp4 \
 
 ### Microphone Mute
 
-**Implementation**: ❌ **Post-processing** (applied during muxing)
+**Implementation**: ✅ **Live** (applied during capture)
 
 - State: `MIC_MUTED` AtomicBool
-- Applied: In `mux_final_video()` function via FFmpeg volume filter
-- Method: FFmpeg `volume=0` filter during muxing
-- Result: Mic audio still captured, but set to silence in final file
-- **Issue**: Mic is still being captured even when muted (wasteful)
+- Applied: In mic capture thread before writing raw PCM chunk
+- Method: Samples are zeroed when muted
+- Result: Mute affects capture in real time and final mux automatically
 
 ### Camera Overlay Toggle
 
@@ -313,7 +324,7 @@ ffmpeg -i temp_video.mp4 \
 
 1. `sck_video_{session_id}.mp4` - Screen video (H.264)
 2. `sck_sysaudio_{session_id}.raw` - System audio (raw PCM s16le)
-3. `sck_mic_{session_id}.m4a` - Microphone audio (AAC) - only if mic enabled
+3. `sck_mic_{session_id}.raw` - Microphone audio (raw PCM s16le) - only if mic enabled
 
 ### Final Output
 
@@ -342,18 +353,18 @@ ffmpeg -i temp_video.mp4 \
 1. User clicks mute button → React updates local state
 2. React calls Tauri command → Backend updates AtomicBool
 3. For system audio: Next callback applies mute immediately
-4. For mic: Mute applied during muxing (when recording stops)
+4. For mic: Next PCM chunk is zeroed in the capture thread
 
 ---
 
 ## Summary of Current Limitations
 
 1. **Webcam Not Captured**: Camera overlay is preview-only, not composited into final video
-2. **No Webcam Sync**: Webcam preview not synchronized with microphone or other streams
-3. **Mic Mute Not Live**: Microphone mute applied post-processing, not during capture
+2. **Webcam still depends on preview/render latency**: it is visually synchronized by screen ticks but remains preview-based.
+3. **Not single-pass**: still relies on a post-recording mux step.
 4. **Camera Toggle Delay**: Starting/stopping camera process causes delays
-5. **No Explicit Timeline**: No master timeline or timestamp normalization
-6. **Potential Drift**: Independent capture processes may drift over time
+5. **No explicit device timestamp unification**: offsets are inferred from arrival timing
+6. **Residual drift risk**: reduced by mic tempo correction, not eliminated by shared hardware clock
 7. **Two-Pass Architecture**: Requires muxing step, not single-pass real-time composition
 
 ---
@@ -364,7 +375,7 @@ ffmpeg -i temp_video.mp4 \
 - **Audio Capture**: ScreenCaptureKit (system) + FFmpeg avfoundation (mic)
 - **Camera Preview**: FFmpeg avfoundation (JPEG streaming)
 - **Encoding**: FFmpeg (H.264 video, AAC audio)
-- **Muxing**: FFmpeg
+- **Muxing**: FFmpeg with start-offset alignment + mic tempo correction + async resampling
 - **Backend**: Rust + Tauri
 - **Frontend**: React + TypeScript + Zustand
 
@@ -376,8 +387,7 @@ To achieve the ideal implementation with live controls and perfect sync:
 
 1. Implement real-time video compositor (screen + webcam overlay)
 2. Implement real-time audio mixer (system + mic with live gain control)
-3. Establish master timeline with timestamp normalization
+3. Establish a true shared timeline based on native media timestamps (not callback arrival)
 4. Capture webcam into recording (not just preview)
-5. Apply mic mute live during capture (not post-processing)
-6. Keep camera capture running continuously (don't stop/start on toggle)
-7. Use AVAssetWriter for single-pass recording (or improve FFmpeg pipeline)
+5. Keep camera capture running continuously (don't stop/start on toggle)
+6. Replace two-pass mux with single-pass AVAssetWriter (or equivalent native writer)

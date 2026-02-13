@@ -1,6 +1,7 @@
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use crate::services::camera::CameraSyncHandle;
 use crate::services::time::cm_time_to_ns;
@@ -21,6 +22,9 @@ pub(super) struct FrameHandler {
     pub(super) audio_samples_written: Arc<AtomicU64>,
     pub(super) system_audio_muted: Arc<AtomicBool>,
     pub(super) recording_paused: Arc<AtomicBool>,
+    pub(super) capture_started_at: Instant,
+    pub(super) first_screen_frame_arrival_ns: Arc<AtomicU64>,
+    pub(super) first_system_audio_arrival_ns: Arc<AtomicU64>,
     pub(super) camera_sync: Option<Arc<CameraSyncHandle>>,
 }
 
@@ -28,6 +32,13 @@ impl SCStreamOutputTrait for FrameHandler {
     fn did_output_sample_buffer(&self, sample: CMSampleBuffer, of_type: SCStreamOutputType) {
         match of_type {
             SCStreamOutputType::Screen => {
+                let now_ns = self.capture_started_at.elapsed().as_nanos() as u64;
+                let _ = self.first_screen_frame_arrival_ns.compare_exchange(
+                    0,
+                    now_ns,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                );
                 let screen_pts_ns = cm_time_to_ns(sample.presentation_timestamp());
                 let duration_ns = cm_time_to_ns(sample.duration());
                 let tick = SCREEN_PTS_COUNTER.fetch_add(1, Ordering::Relaxed) + 1;
@@ -67,6 +78,13 @@ impl SCStreamOutputTrait for FrameHandler {
             }
             SCStreamOutputType::Audio => {
                 // Write audio to named pipe (convert Float32 to s16le)
+                let now_ns = self.capture_started_at.elapsed().as_nanos() as u64;
+                let _ = self.first_system_audio_arrival_ns.compare_exchange(
+                    0,
+                    now_ns,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                );
                 self.capture_audio_metadata(&sample);
                 if self.recording_paused.load(Ordering::Relaxed) {
                     return;

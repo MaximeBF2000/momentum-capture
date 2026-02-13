@@ -1,9 +1,10 @@
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Instant;
 
 use crate::error::{AppError, AppResult};
 use crate::services::camera::CameraSyncHandle;
@@ -29,6 +30,7 @@ pub fn start_recording(
     // 3. Record mic to temp file (if enabled) - separate FFmpeg process
     // 4. On stop: mux all together into final output
     recording_paused.store(false, std::sync::atomic::Ordering::Relaxed);
+    let capture_started_at = Instant::now();
 
     println!("[SCK] Starting recording (two-pass mode)...");
     println!("[SCK]   Final output: {:?}", output_path);
@@ -146,6 +148,8 @@ pub fn start_recording(
 
     // === MIC RECORDING: Separate FFmpeg process ===
     let mut mic_format: Option<(u32, u32)> = None;
+    let mic_samples_written = Arc::new(AtomicU64::new(0));
+    let first_mic_audio_arrival_ns = Arc::new(AtomicU64::new(0));
     let mic_process = if mic_enabled {
         println!("[SCK] Starting mic recording...");
         let mic_sample_rate = 48_000u32;
@@ -197,6 +201,10 @@ pub fn start_recording(
             let mut writer = std::io::BufWriter::new(mic_writer);
             let mic_muted = mic_muted.clone();
             let recording_paused = recording_paused.clone();
+            let mic_samples_written = mic_samples_written.clone();
+            let first_mic_audio_arrival_ns = first_mic_audio_arrival_ns.clone();
+            let mic_channels_usize = mic_channel_count as usize;
+            let capture_started_at = capture_started_at;
             thread::spawn(move || {
                 let mut reader = stdout;
                 let mut buffer = vec![0u8; 8192];
@@ -207,6 +215,13 @@ pub fn start_recording(
                             break;
                         }
                         Ok(len) => {
+                            let now_ns = capture_started_at.elapsed().as_nanos() as u64;
+                            let _ = first_mic_audio_arrival_ns.compare_exchange(
+                                0,
+                                now_ns,
+                                Ordering::Relaxed,
+                                Ordering::Relaxed,
+                            );
                             if recording_paused.load(std::sync::atomic::Ordering::Relaxed) {
                                 continue;
                             }
@@ -217,6 +232,9 @@ pub fn start_recording(
                                 eprintln!("[SCK] Mic writer error: {}", err);
                                 break;
                             }
+                            let bytes_per_frame = 2usize.saturating_mul(mic_channels_usize.max(1));
+                            let frames = len / bytes_per_frame;
+                            mic_samples_written.fetch_add(frames as u64, Ordering::Relaxed);
                         }
                         Err(err) => {
                             eprintln!("[SCK] Mic reader error: {}", err);
@@ -262,6 +280,8 @@ pub fn start_recording(
     let system_audio_sample_rate = Arc::new(AtomicU32::new(0));
     let system_audio_channel_count = Arc::new(AtomicU32::new(0));
     let audio_layout_logged = Arc::new(AtomicBool::new(false));
+    let first_screen_frame_arrival_ns = Arc::new(AtomicU64::new(0));
+    let first_system_audio_arrival_ns = Arc::new(AtomicU64::new(0));
 
     // Add video handler
     let handler = FrameHandler {
@@ -275,6 +295,9 @@ pub fn start_recording(
         audio_samples_written: audio_samples_written.clone(),
         system_audio_muted: system_audio_muted.clone(),
         recording_paused: recording_paused.clone(),
+        capture_started_at,
+        first_screen_frame_arrival_ns: first_screen_frame_arrival_ns.clone(),
+        first_system_audio_arrival_ns: first_system_audio_arrival_ns.clone(),
         camera_sync: camera_sync.clone(),
     };
     stream.add_output_handler(handler, SCStreamOutputType::Screen);
@@ -291,6 +314,9 @@ pub fn start_recording(
         audio_samples_written: audio_samples_written.clone(),
         system_audio_muted: system_audio_muted.clone(),
         recording_paused: recording_paused.clone(),
+        capture_started_at,
+        first_screen_frame_arrival_ns: first_screen_frame_arrival_ns.clone(),
+        first_system_audio_arrival_ns: first_system_audio_arrival_ns.clone(),
         camera_sync: camera_sync.clone(),
     };
     stream.add_output_handler(audio_handler, SCStreamOutputType::Audio);
@@ -322,6 +348,11 @@ pub fn start_recording(
         video_frame_count,
         audio_frame_count,
         audio_samples_written,
+        mic_samples_written,
+        capture_started_at,
+        first_screen_frame_arrival_ns,
+        first_system_audio_arrival_ns,
+        first_mic_audio_arrival_ns,
         requested_fps: 30,
         mic_sample_rate: mic_format.map(|f| f.0),
         mic_channel_count: mic_format.map(|f| f.1),

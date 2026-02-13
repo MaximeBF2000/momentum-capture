@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::process::Child;
 use std::sync::atomic::{AtomicU32, AtomicU64};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use screencapturekit::prelude::SCStream;
 
@@ -22,6 +23,11 @@ pub(super) struct RecordingState {
     pub video_frame_count: Arc<AtomicU64>,
     pub audio_frame_count: Arc<AtomicU64>,
     pub audio_samples_written: Arc<AtomicU64>,
+    pub mic_samples_written: Arc<AtomicU64>,
+    pub capture_started_at: Instant,
+    pub first_screen_frame_arrival_ns: Arc<AtomicU64>,
+    pub first_system_audio_arrival_ns: Arc<AtomicU64>,
+    pub first_mic_audio_arrival_ns: Arc<AtomicU64>,
     pub requested_fps: u32,
     pub mic_sample_rate: Option<u32>,
     pub mic_channel_count: Option<u32>,

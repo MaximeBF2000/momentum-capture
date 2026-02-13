@@ -51,14 +51,14 @@ Prefer these exact commands.
 
 ### Frontend
 
-- Dev: `npm run dev`
-- Build: `npm run build`
-- Preview build: `npm run preview`
+- Dev: `pnpm dev` (or `npm run dev`)
+- Build: `pnpm build` (or `npm run build`)
+- Preview build: `pnpm preview` (or `npm run preview`)
 
 ### Tauri
 
-- Run app: `npm run tauri dev`
-- Build app: `npm run tauri build`
+- Run app: `pnpm tauri dev` (or `npm run tauri dev`)
+- Build app: `pnpm tauri build` (or `npm run tauri build`)
 
 Do **not** invent new scripts unless necessary.
 If you add one, document it here.
@@ -183,7 +183,7 @@ If behavior affects:
 
 → double-check against `PRODUCT_SPECS.md`
 
-Screenshots and visual references live in `/_AGENTS/images/`.
+Screenshots and visual references live in `/_AGENT/images/`.
 
 ---
 
