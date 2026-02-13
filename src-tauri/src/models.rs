@@ -12,7 +12,7 @@ pub struct RecordingOptions {
     pub screen_target: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     pub mic_enabled: bool,

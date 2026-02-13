@@ -23,31 +23,20 @@ import {
   setSystemAudioMuted
 } from '../../tauri/commands'
 import { useSettingsStore } from '../../state/settingsStore'
-import { useEffect } from 'react'
 
 export function ControlBar() {
   const {
     recordingState,
-    isCameraEnabled,
     isMicMuted,
     isSystemAudioMuted,
     startCountdown,
     setRecordingState,
-    toggleCamera,
     toggleMicMute,
     toggleSystemAudioMute,
     setError
   } = useRecordingStore()
 
   const { settings, updateSetting } = useSettingsStore()
-
-  useEffect(() => {
-    // Sync store with settings
-    useRecordingStore.setState({
-      isMicEnabled: settings.micEnabled,
-      isCameraEnabled: settings.cameraEnabled
-    })
-  }, [settings])
 
   const handleStart = async () => {
     try {
@@ -71,19 +60,18 @@ export function ControlBar() {
 
           // Start recording - set state optimistically to avoid UI delay
           try {
-            const recordingState = useRecordingStore.getState()
             console.log(
               'Countdown finished, starting recording with options:',
               {
-                mic: recordingState.isMicEnabled,
-                camera: recordingState.isCameraEnabled
+                mic: settings.micEnabled,
+                camera: settings.cameraEnabled
               }
             )
             // Set state to recording immediately to enable buttons and start timer
             setRecordingState('recording')
             await startRecording({
-              includeMicrophone: recordingState.isMicEnabled,
-              includeCamera: recordingState.isCameraEnabled
+              includeMicrophone: settings.micEnabled,
+              includeCamera: settings.cameraEnabled
             })
             console.log('Recording command sent successfully')
           } catch (err: any) {
@@ -147,8 +135,7 @@ export function ControlBar() {
   }
 
   const handleCameraToggle = async () => {
-    toggleCamera()
-    const newValue = !isCameraEnabled
+    const newValue = !settings.cameraEnabled
     updateSetting('cameraEnabled', newValue)
     // Update settings and camera overlay visibility
     try {
@@ -308,14 +295,14 @@ export function ControlBar() {
             onClick={handleCameraToggle}
             disabled={isCountdown || recordingState === 'stopping'}
             className={`cursor-pointer w-8 h-8 rounded-full flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-              isCameraEnabled
+              settings.cameraEnabled
                 ? 'bg-neutral-800 border-2 border-blue-500'
                 : 'bg-neutral-800 hover:bg-neutral-700'
             }`}
-            aria-label={isCameraEnabled ? 'Disable Camera' : 'Enable Camera'}
+            aria-label={settings.cameraEnabled ? 'Disable Camera' : 'Enable Camera'}
             data-tauri-drag-region="false"
           >
-            {isCameraEnabled ? (
+            {settings.cameraEnabled ? (
               <Camera className="w-4 h-4 text-blue-500" />
             ) : (
               <CameraOff className="w-4 h-4 text-neutral-400" />

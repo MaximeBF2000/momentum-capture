@@ -1,20 +1,18 @@
 use crate::error::{AppError, AppResult};
-#[cfg(target_os = "macos")]
 use crate::services::platform::device_resolver;
-#[cfg(target_os = "macos")]
 use crate::services::time::host_time_now_ns;
-#[cfg(not(target_os = "macos"))]
-use crate::services::time::monotonic_now_ns as host_time_now_ns;
-use std::collections::VecDeque;
-use std::sync::{Arc, Mutex, OnceLock};
-use std::process::{Command, Stdio};
-use std::io::Read;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use tauri::{AppHandle, Emitter};
-use std::thread;
-use base64::{Engine as _, engine::general_purpose};
+use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::VecDeque;
+use std::io::Read;
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use tauri::{AppHandle, Emitter};
+
+use crate::services::platform::macos::ffmpeg::FfmpegLocator;
 
 const CAMERA_BUFFER_CAPACITY: usize = 300;
 const CAMERA_FRAME_DURATION_NS: u64 = 33_333_333; // ~30 FPS
@@ -40,8 +38,6 @@ pub struct SyncedFrameBuffer {
     min_queued: usize,
     max_queued: usize,
 }
-
-static GLOBAL_SYNC_HANDLE: OnceLock<CameraSyncHandle> = OnceLock::new();
 
 impl SyncedFrameBuffer {
     pub fn new() -> Self {
@@ -220,9 +216,8 @@ impl CameraSyncHandle {
             return;
         }
 
-        let adjusted_screen_ns = screen_pts_ns.saturating_sub(
-            self.target_offset_ns.load(Ordering::Relaxed)
-        );
+        let adjusted_screen_ns =
+            screen_pts_ns.saturating_sub(self.target_offset_ns.load(Ordering::Relaxed));
 
         let (frame, remaining, leading_delay_ns) = {
             let mut buffer = self.frame_buffer.lock().unwrap();
@@ -237,8 +232,7 @@ impl CameraSyncHandle {
 
         if let Some(frame) = frame {
             let delta = screen_pts_ns.saturating_sub(frame.pts_ns);
-            self.last_emit_delta_ns
-                .store(delta, Ordering::Relaxed);
+            self.last_emit_delta_ns.store(delta, Ordering::Relaxed);
             let out_count = self.frame_out_count.fetch_add(1, Ordering::Relaxed) + 1;
             if out_count <= 5 || out_count % 30 == 0 || delta > 25_000_000 {
                 println!(
@@ -311,17 +305,22 @@ impl CameraSyncHandle {
 
 pub struct CameraPreview {
     is_running: Arc<Mutex<bool>>,
-    sync_handle: CameraSyncHandle,
+    sync_handle: Arc<CameraSyncHandle>,
+    ffmpeg_locator: Arc<FfmpegLocator>,
 }
 
 impl CameraPreview {
-    pub fn new() -> Self {
-        let handle = CameraSyncHandle::new();
-        let _ = GLOBAL_SYNC_HANDLE.set(handle.clone());
+    pub fn new(ffmpeg_locator: Arc<FfmpegLocator>) -> Self {
+        let handle = Arc::new(CameraSyncHandle::new());
         Self {
             is_running: Arc::new(Mutex::new(false)),
             sync_handle: handle,
+            ffmpeg_locator,
         }
+    }
+
+    pub fn sync_handle(&self) -> Arc<CameraSyncHandle> {
+        self.sync_handle.clone()
     }
 
     pub fn set_app_handle(&mut self, app: AppHandle) {
@@ -332,61 +331,44 @@ impl CameraPreview {
         *self.is_running.lock().unwrap()
     }
 
-    fn find_ffmpeg() -> Option<String> {
-        // Try common macOS FFmpeg locations
-        let possible_paths = vec![
-            "ffmpeg", // System PATH
-            "/opt/homebrew/bin/ffmpeg", // Homebrew on Apple Silicon
-            "/usr/local/bin/ffmpeg", // Homebrew on Intel
-            "/usr/bin/ffmpeg", // System location
-        ];
-        
-        for path in possible_paths {
-            if Command::new(path).arg("-version").output().is_ok() {
-                println!("[CameraPreview] Found FFmpeg at: {}", path);
-                return Some(path.to_string());
-            }
-        }
-        
-        None
-    }
-
     pub fn start(&self) -> AppResult<()> {
         let mut is_running = self.is_running.lock().unwrap();
-        
+
         if *is_running {
             // Already running, just return success
             return Ok(());
         }
 
-        // Find FFmpeg executable
-        let ffmpeg_path = Self::find_ffmpeg()
-            .ok_or_else(|| AppError::Camera(
-                "FFmpeg is not installed or not found in PATH. Please install FFmpeg via Homebrew: brew install ffmpeg".to_string()
-            ))?;
-        
-        println!("[CameraPreview] Starting camera preview with FFmpeg: {}", ffmpeg_path);
+        let ffmpeg_path = self
+            .ffmpeg_locator
+            .resolve()
+            .map_err(|err| AppError::Camera(err.to_string()))?;
 
-        // Resolve camera device index
-        #[cfg(target_os = "macos")]
-        let camera_index = {
-            match device_resolver::resolve_avf_indices() {
-                Ok(devices) => {
-                    match devices.get_camera_index() {
-                        Ok(idx) => {
-                            println!("[CameraPreview] Resolved built-in camera index: {}", idx);
-                            idx
-                        }
-                        Err(e) => {
-                            eprintln!("[CameraPreview] Failed to resolve camera index: {}, falling back to 0", e);
-                            0
-                        }
-                    }
+        println!(
+            "[CameraPreview] Starting camera preview with FFmpeg: {}",
+            ffmpeg_path.display()
+        );
+
+        let camera_index = match device_resolver::resolve_avf_indices() {
+            Ok(devices) => match devices.get_camera_index() {
+                Ok(idx) => {
+                    println!("[CameraPreview] Resolved built-in camera index: {}", idx);
+                    idx
                 }
                 Err(e) => {
-                    eprintln!("[CameraPreview] Failed to resolve device indices: {}, falling back to 0", e);
+                    eprintln!(
+                        "[CameraPreview] Failed to resolve camera index: {}, falling back to 0",
+                        e
+                    );
                     0
                 }
+            },
+            Err(e) => {
+                eprintln!(
+                    "[CameraPreview] Failed to resolve device indices: {}, falling back to 0",
+                    e
+                );
+                0
             }
         };
 
@@ -397,76 +379,62 @@ impl CameraPreview {
 
         // Start FFmpeg in a separate thread
         let ffmpeg_path_clone = ffmpeg_path.clone();
-        #[cfg(target_os = "macos")]
         let camera_index_clone = camera_index;
         thread::spawn(move || {
             let mut cmd = Command::new(&ffmpeg_path_clone);
-            
-            #[cfg(target_os = "macos")]
-            {
-                // Use resolved built-in camera index
-                // Use 30 fps for smooth preview, lower quality for speed
-                cmd.args(&[
-                    "-f", "avfoundation",
-                    "-framerate", "30",
-                    "-video_size", "640x480",
-                    "-i", &format!("{}:", camera_index_clone), // Built-in camera, no audio
-                    "-vf", "fps=30", // Keep at 30 fps for smooth preview
-                    "-f", "image2pipe",
-                    "-vcodec", "mjpeg",
-                    "-q:v", "3", // Lower quality number = higher quality but faster encoding
-                    "-"
-                ]);
-            }
-            
-            #[cfg(target_os = "windows")]
-            {
-                cmd.args(&[
-                    "-f", "dshow",
-                    "-i", "video=Integrated Camera",
-                    "-vf", "fps=10",
-                    "-f", "image2pipe",
-                    "-vcodec", "mjpeg",
-                    "-q:v", "5",
-                    "-"
-                ]);
-            }
-            
-            #[cfg(target_os = "linux")]
-            {
-                cmd.args(&[
-                    "-f", "v4l2",
-                    "-i", "/dev/video0",
-                    "-vf", "fps=10",
-                    "-f", "image2pipe",
-                    "-vcodec", "mjpeg",
-                    "-q:v", "5",
-                    "-"
-                ]);
-            }
-            
+
+            cmd.args(&[
+                "-f",
+                "avfoundation",
+                "-framerate",
+                "30",
+                "-video_size",
+                "640x480",
+                "-i",
+                &format!("{}:", camera_index_clone), // Built-in camera, no audio
+                "-vf",
+                "fps=30", // Keep at 30 fps for smooth preview
+                "-f",
+                "image2pipe",
+                "-vcodec",
+                "mjpeg",
+                "-q:v",
+                "3", // Lower quality number = higher quality but faster encoding
+                "-",
+            ]);
+
             cmd.stdout(Stdio::piped());
             cmd.stderr(Stdio::piped()); // Capture stderr for debugging
-            
+
             let mut process = match cmd.spawn() {
                 Ok(p) => {
-                    println!("[CameraPreview] FFmpeg process spawned successfully (PID: {})", p.id());
+                    println!(
+                        "[CameraPreview] FFmpeg process spawned successfully (PID: {})",
+                        p.id()
+                    );
                     p
                 }
                 Err(e) => {
-                    let error_msg = format!("Failed to spawn camera FFmpeg process: {}. FFmpeg path used: {}", e, ffmpeg_path_clone);
+                    let error_msg = format!(
+                        "Failed to spawn camera FFmpeg process: {}. FFmpeg path used: {}",
+                        e,
+                        ffmpeg_path_clone.display()
+                    );
                     eprintln!("[CameraPreview] ERROR: {}", error_msg);
                     *is_running_clone.lock().unwrap() = false;
 
                     if let Some(app) = sync_handle_clone.app_handle.lock().unwrap().as_ref() {
-                        let _ = app.emit("camera-error", json!({
-                            "message": error_msg
-                        }));
+                        let _ = app.emit(
+                            "camera-error",
+                            json!({
+                                "message": error_msg
+                            }),
+                        );
                     }
                     return;
                 }
             };
-            
+
             // Read stderr in a separate thread to capture errors (but don't log everything)
             let stderr = process.stderr.take();
             if let Some(mut stderr) = stderr {
@@ -500,24 +468,30 @@ impl CameraPreview {
                     Ok(n) => {
                         for i in 0..n {
                             let byte = buffer[i];
-                            
+
                             // Look for JPEG start marker (FF D8)
-                            if !found_start && i < n - 1 && buffer[i] == 0xFF && buffer[i + 1] == 0xD8 {
+                            if !found_start
+                                && i < n - 1
+                                && buffer[i] == 0xFF
+                                && buffer[i + 1] == 0xD8
+                            {
                                 found_start = true;
                                 jpeg_data.clear();
                                 jpeg_data.push(byte);
                             } else if found_start {
                                 jpeg_data.push(byte);
-                                
+
                                 // Check for JPEG end marker (FF D9)
-                                if jpeg_data.len() >= 2 && 
-                                   jpeg_data[jpeg_data.len() - 2] == 0xFF && 
-                                   jpeg_data[jpeg_data.len() - 1] == 0xD9 {
+                                if jpeg_data.len() >= 2
+                                    && jpeg_data[jpeg_data.len() - 2] == 0xFF
+                                    && jpeg_data[jpeg_data.len() - 1] == 0xD9
+                                {
                                     // Complete JPEG frame found
                                     // Only emit if enough time has passed (throttle to ~30 FPS max)
                                     let now = std::time::Instant::now();
                                     if now.duration_since(last_frame_time).as_millis() >= 33 {
-                                        let base64_frame = general_purpose::STANDARD.encode(&jpeg_data);
+                                        let base64_frame =
+                                            general_purpose::STANDARD.encode(&jpeg_data);
                                         let pts_ns = host_time_now_ns();
 
                                         sync_handle_clone.push_frame(CameraFramePayload {
@@ -532,7 +506,7 @@ impl CameraPreview {
                                         frame_id += 1;
                                         last_frame_time = now;
                                     }
-                                    
+
                                     found_start = false;
                                     jpeg_data.clear();
                                 }
@@ -549,7 +523,7 @@ impl CameraPreview {
 
     pub fn stop(&self) -> AppResult<()> {
         let mut is_running = self.is_running.lock().unwrap();
-        
+
         if !*is_running {
             // Already stopped, return success
             return Ok(());
@@ -558,26 +532,10 @@ impl CameraPreview {
         *is_running = false;
         self.sync_handle.set_sync_enabled(false);
         self.sync_handle.clear();
-        
+
         // Note: The FFmpeg process will detect is_running=false and exit naturally
         // We don't need to kill it explicitly as the thread checks the flag
-        
-        Ok(())
-    }
-}
- 
-pub fn set_camera_sync_enabled(enabled: bool) {
-    if let Some(handle) = GLOBAL_SYNC_HANDLE.get() {
-        println!(
-            "[CameraSync] {} camera timeline alignment",
-            if enabled { "Enabling" } else { "Disabling" }
-        );
-        handle.set_sync_enabled(enabled);
-    }
-}
 
-pub fn emit_camera_frame_for_screen_pts(screen_pts_ns: u64) {
-    if let Some(handle) = GLOBAL_SYNC_HANDLE.get() {
-        handle.emit_for_screen_pts(screen_pts_ns);
+        Ok(())
     }
 }

@@ -6,6 +6,8 @@ mod commands;
 use crate::error::{AppError, AppResult};
 use crate::models::AppSettings;
 use services::{Recorder, CameraPreview, immersive::ImmersiveMode};
+use services::platform::macos::ffmpeg::FfmpegLocator;
+use services::settings::SettingsStore;
 use std::sync::{mpsc, Arc, Mutex};
 use tauri::{
     menu::{Menu, MenuId, MenuItemBuilder, MenuItemKind, Submenu},
@@ -22,13 +24,18 @@ pub fn run() {
         .setup(|app| {
             let app_handle = app.handle();
 
-            app.manage(Mutex::new(Recorder::new()));
-            app.manage(Mutex::new(CameraPreview::new()));
+            let ffmpeg_locator = Arc::new(FfmpegLocator::new());
+            let camera_preview = CameraPreview::new(ffmpeg_locator.clone());
+            let camera_sync = camera_preview.sync_handle();
+
+            app.manage(Recorder::new(ffmpeg_locator, camera_sync));
+            app.manage(Mutex::new(camera_preview));
             app.manage(Arc::new(Mutex::new(ImmersiveMode::new())));
+            app.manage(SettingsStore::new(None)?);
 
             position_overlay_windows(&app_handle);
 
-            let settings = services::settings::load_settings().unwrap_or_default();
+            let settings = app.state::<SettingsStore>().load().unwrap_or_default();
             initialize_camera_overlay(&app_handle, &settings)?;
             build_app_menu(&app_handle, &settings)?;
             register_menu_handlers(&app_handle)?;

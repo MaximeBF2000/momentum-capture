@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use crate::error::{AppError, AppResult};
-use crate::services::platform::macos::ffmpeg::find_ffmpeg;
 use crate::services::MIC_VOLUME_GAIN;
+use std::path::Path;
 
 pub(super) fn mux_final_video(
     video_path: &PathBuf,
@@ -13,31 +13,37 @@ pub(super) fn mux_final_video(
     system_audio_sample_rate: Option<u32>,
     system_audio_channels: Option<u32>,
     mic_audio_format: Option<(u32, u32)>,
+    ffmpeg_path: &Path,
 ) -> AppResult<()> {
-    let ffmpeg_path = find_ffmpeg();
-    let mut cmd = Command::new(&ffmpeg_path);
+    let mut cmd = Command::new(ffmpeg_path);
     cmd.args(["-y", "-hide_banner", "-loglevel", "warning"]);
-    
+
     // Input 0: Video (mp4)
     cmd.args(["-i", video_path.to_str().unwrap()]);
-    
+
     // Input 1: System audio (raw s16le)
-    let sys_audio_size = std::fs::metadata(system_audio_path).map(|m| m.len()).unwrap_or(0);
+    let sys_audio_size = std::fs::metadata(system_audio_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
     let has_system_audio = sys_audio_size > 1000; // More than just header
-    
+
     if has_system_audio {
         let detected_rate = system_audio_sample_rate.filter(|rate| *rate > 0);
         let detected_channels = system_audio_channels.filter(|channels| *channels > 0);
         let sample_rate = detected_rate.unwrap_or(48_000);
         let channel_count = detected_channels.unwrap_or(2).max(1);
         cmd.args([
-            "-f", "s16le",
-            "-ar", &sample_rate.to_string(),
-            "-ac", &channel_count.to_string(),
-            "-i", system_audio_path.to_str().unwrap()
+            "-f",
+            "s16le",
+            "-ar",
+            &sample_rate.to_string(),
+            "-ac",
+            &channel_count.to_string(),
+            "-i",
+            system_audio_path.to_str().unwrap(),
         ]);
     }
-    
+
     // Input 2: Mic audio (if present)
     let has_mic_audio = mic_audio_path.map(|p| p.exists()).unwrap_or(false);
     if has_mic_audio {
@@ -53,22 +59,19 @@ pub(super) fn mux_final_video(
             mic_audio_path.unwrap().to_str().unwrap(),
         ]);
     }
-    
+
     // Mapping depends on what audio we have
     cmd.args(["-map", "0:v"]); // Always map video
 
     let limiter = "alimiter=limit=0.97";
     let mic_gain_enabled = (MIC_VOLUME_GAIN - 1.0).abs() > f32::EPSILON;
-    
+
     if has_system_audio && has_mic_audio {
         // Mix both audio sources with mic gain applied before amix
         let mut filter_parts = Vec::new();
         let mut mic_source_label = "2:a".to_string();
         if mic_gain_enabled {
-            filter_parts.push(format!(
-                "[2:a]volume={:.2}[mic_gain];",
-                MIC_VOLUME_GAIN
-            ));
+            filter_parts.push(format!("[2:a]volume={:.2}[mic_gain];", MIC_VOLUME_GAIN));
             mic_source_label = "mic_gain".into();
         }
         filter_parts.push(format!(
@@ -94,10 +97,7 @@ pub(super) fn mux_final_video(
             ));
             mic_source_label = "mic_gain".into();
         }
-        filter_parts.push(format!(
-            "[{}]{}[aout]",
-            mic_source_label, limiter
-        ));
+        filter_parts.push(format!("[{}]{}[aout]", mic_source_label, limiter));
         let filter_complex = filter_parts.join("");
         cmd.arg("-filter_complex");
         cmd.arg(filter_complex);
@@ -106,25 +106,30 @@ pub(super) fn mux_final_video(
         // No audio - just copy video
         cmd.args(["-c:v", "copy"]);
         cmd.arg(output_path.to_str().unwrap());
-        
+
         println!("[SCK] Muxing: video only (no audio)");
-        let status = cmd.status()
+        let status = cmd
+            .status()
             .map_err(|e| AppError::Recording(format!("Mux failed: {}", e)))?;
-        
+
         if !status.success() {
             return Err(AppError::Recording("Mux process failed".to_string()));
         }
         return Ok(());
     }
-    
+
     // Audio encoding
     cmd.args(["-c:v", "copy", "-c:a", "aac", "-b:a", "128k", "-shortest"]);
     cmd.args(["-movflags", "+faststart"]);
     cmd.arg(output_path.to_str().unwrap());
-    
+
     println!(
         "[SCK] Muxing: video + {} + {}{}",
-        if has_system_audio { "system audio" } else { "no system audio" },
+        if has_system_audio {
+            "system audio"
+        } else {
+            "no system audio"
+        },
         if has_mic_audio {
             format!("mic (gain x{:.2})", MIC_VOLUME_GAIN)
         } else {
@@ -136,21 +141,20 @@ pub(super) fn mux_final_video(
                 system_audio_sample_rate
                     .filter(|r| *r > 0)
                     .unwrap_or(48_000),
-                system_audio_channels
-                    .filter(|c| *c > 0)
-                    .unwrap_or(2)
+                system_audio_channels.filter(|c| *c > 0).unwrap_or(2)
             )
         } else {
             String::new()
         }
     );
-    
-    let status = cmd.status()
+
+    let status = cmd
+        .status()
         .map_err(|e| AppError::Recording(format!("Mux failed: {}", e)))?;
-    
+
     if !status.success() {
         return Err(AppError::Recording("Mux process failed".to_string()));
     }
-    
+
     Ok(())
 }

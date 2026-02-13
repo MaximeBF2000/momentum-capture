@@ -3,27 +3,13 @@ use std::sync::Arc;
 
 pub type HotkeyCallback = Arc<dyn Fn() + Send + Sync + 'static>;
 
-#[cfg(target_os = "macos")]
 pub fn register_hotkey(shortcut: &str, callback: HotkeyCallback) -> AppResult<()> {
     macos::register_hotkey(shortcut, callback)
 }
 
-#[cfg(target_os = "macos")]
 pub fn unregister_hotkey() -> AppResult<()> {
     macos::unregister_hotkey()
 }
-
-#[cfg(not(target_os = "macos"))]
-pub fn register_hotkey(_shortcut: &str, _callback: HotkeyCallback) -> AppResult<()> {
-    Ok(())
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn unregister_hotkey() -> AppResult<()> {
-    Ok(())
-}
-
-#[cfg(target_os = "macos")]
 mod macos {
     use super::{AppError, AppResult, HotkeyCallback};
     use std::{
@@ -111,8 +97,7 @@ mod macos {
         ) -> OSStatus;
     }
 
-    type EventHandlerUPP =
-        extern "C" fn(EventHandlerCallRef, EventRef, *mut c_void) -> OSStatus;
+    type EventHandlerUPP = extern "C" fn(EventHandlerCallRef, EventRef, *mut c_void) -> OSStatus;
 
     #[derive(Debug)]
     struct ParsedShortcut {
@@ -254,7 +239,11 @@ mod macos {
         let mut modifiers = 0u32;
         let mut key_code: Option<u32> = None;
 
-        for segment in shortcut.split('+').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        for segment in shortcut
+            .split('+')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
             match segment.to_ascii_lowercase().as_str() {
                 "command" | "cmd" | "⌘" => modifiers |= CMD_KEY,
                 "control" | "ctrl" | "^" => modifiers |= CONTROL_KEY,
@@ -268,20 +257,19 @@ mod macos {
                     }
                     key_code = key_code_for(segment);
                     if key_code.is_none() {
-                        return Err(AppError::Settings(format!(
-                            "Unsupported key '{}'",
-                            segment
-                        )));
+                        return Err(AppError::Settings(format!("Unsupported key '{}'", segment)));
                     }
                 }
             }
         }
 
-        let key_code = key_code.ok_or_else(|| {
-            AppError::Settings("Shortcut must include a non-modifier key".into())
-        })?;
+        let key_code = key_code
+            .ok_or_else(|| AppError::Settings("Shortcut must include a non-modifier key".into()))?;
 
-        Ok(ParsedShortcut { key_code, modifiers })
+        Ok(ParsedShortcut {
+            key_code,
+            modifiers,
+        })
     }
 
     fn key_code_for(key: &str) -> Option<u32> {

@@ -1,21 +1,28 @@
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::Ordering;
+use std::sync::Mutex;
 use std::thread;
 
 use crate::error::{AppError, AppResult};
 
 use super::mux::mux_final_video;
-use super::state::{set_recording_paused, take_state};
+use super::state::RecordingState;
 
-pub fn stop_recording() -> AppResult<PathBuf> {
+pub fn stop_recording(
+    state: &Mutex<Option<RecordingState>>,
+    recording_paused: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> AppResult<PathBuf> {
     println!("[SCK] === STOP RECORDING START ===");
     let stop_start = std::time::Instant::now();
-    
-    let mut state = take_state()
+
+    let mut state = state
+        .lock()
+        .unwrap()
+        .take()
         .ok_or_else(|| AppError::Recording("No active recording".to_string()))?;
-    set_recording_paused(false);
-    
+    recording_paused.store(false, Ordering::Relaxed);
+
     let output_path = state.output_path.clone();
     let temp_video_path = state.temp_video_path.clone();
     let system_audio_path = state.system_audio_path.clone();
@@ -24,15 +31,15 @@ pub fn stop_recording() -> AppResult<PathBuf> {
     let system_audio_channel_count = state.system_audio_channel_count.load(Ordering::Relaxed);
     let mic_sample_rate = state.mic_sample_rate;
     let mic_channel_count = state.mic_channel_count;
-    
+
     // STEP 1: Stop ScreenCaptureKit capture
     println!("[SCK] Stopping ScreenCaptureKit capture...");
     let _ = state.stream.stop_capture();
     println!("[SCK] ✓ Capture stopped");
-    
+
     // STEP 2: Wait briefly for callbacks to finish
     thread::sleep(std::time::Duration::from_millis(100));
-    
+
     // STEP 3: Close writers
     println!("[SCK] Closing writers...");
     {
@@ -40,20 +47,24 @@ pub fn stop_recording() -> AppResult<PathBuf> {
         *guard = None;
     }
     println!("[SCK] ✓ Video writer closed");
-    
+
     {
         let mut guard = state.audio_writer.lock().unwrap();
         *guard = None;
     }
     println!("[SCK] ✓ Audio writer closed");
-    
+
     // STEP 4: Wait for video FFmpeg to finish (should finish quickly since stdin is closed)
     println!("[SCK] Waiting for video FFmpeg to finish...");
     let wait_start = std::time::Instant::now();
     loop {
         match state.ffmpeg_process.try_wait() {
             Ok(Some(status)) => {
-                println!("[SCK] ✓ Video FFmpeg exited: {:?} ({:?})", status, wait_start.elapsed());
+                println!(
+                    "[SCK] ✓ Video FFmpeg exited: {:?} ({:?})",
+                    status,
+                    wait_start.elapsed()
+                );
                 break;
             }
             Ok(None) => {
@@ -71,13 +82,15 @@ pub fn stop_recording() -> AppResult<PathBuf> {
             }
         }
     }
-    
+
     // STEP 5: Stop mic FFmpeg (if running)
     if let Some(mut mic_proc) = state.mic_process.take() {
         println!("[SCK] Stopping mic FFmpeg...");
         let mic_pid = mic_proc.id();
-        let _ = Command::new("kill").args(["-INT", &mic_pid.to_string()]).status();
-        
+        let _ = Command::new("kill")
+            .args(["-INT", &mic_pid.to_string()])
+            .status();
+
         // Wait for mic FFmpeg
         let mic_wait = std::time::Instant::now();
         loop {
@@ -101,7 +114,7 @@ pub fn stop_recording() -> AppResult<PathBuf> {
             }
         }
     }
-    
+
     let video_frames = state.video_frame_count.load(Ordering::Relaxed);
     let audio_packets = state.audio_frame_count.load(Ordering::Relaxed);
     let audio_samples = state.audio_samples_written.load(Ordering::Relaxed);
@@ -125,7 +138,7 @@ pub fn stop_recording() -> AppResult<PathBuf> {
         approx_audio_seconds,
         system_audio_sample_rate
     );
-    
+
     // STEP 6: Mux video + audio together
     println!("[SCK] Muxing video + audio...");
     let mux_result = mux_final_video(
@@ -144,17 +157,21 @@ pub fn stop_recording() -> AppResult<PathBuf> {
             None
         },
         mic_sample_rate.zip(mic_channel_count),
+        &state.ffmpeg_path,
     );
-    
+
     // Clean up temp files
     let _ = std::fs::remove_file(&temp_video_path);
     let _ = std::fs::remove_file(&system_audio_path);
     if let Some(mic_path) = &mic_audio_path {
         let _ = std::fs::remove_file(mic_path);
     }
-    
-    println!("[SCK] === STOP RECORDING COMPLETE in {:?} ===", stop_start.elapsed());
-    
+
+    println!(
+        "[SCK] === STOP RECORDING COMPLETE in {:?} ===",
+        stop_start.elapsed()
+    );
+
     // Check result
     if let Err(e) = mux_result {
         println!("[SCK] ⚠ Mux failed: {}, returning video-only", e);
@@ -163,12 +180,20 @@ pub fn stop_recording() -> AppResult<PathBuf> {
             let _ = std::fs::copy(&temp_video_path, &output_path);
         }
     }
-    
+
     if output_path.exists() {
-        let size = std::fs::metadata(&output_path).map(|m| m.len()).unwrap_or(0);
-        println!("[SCK] ✓ Recording saved: {:?} ({} bytes)", output_path, size);
+        let size = std::fs::metadata(&output_path)
+            .map(|m| m.len())
+            .unwrap_or(0);
+        println!(
+            "[SCK] ✓ Recording saved: {:?} ({} bytes)",
+            output_path, size
+        );
         Ok(output_path)
     } else {
-        Err(AppError::Recording(format!("Output file not created: {:?}", output_path)))
+        Err(AppError::Recording(format!(
+            "Output file not created: {:?}",
+            output_path
+        )))
     }
 }

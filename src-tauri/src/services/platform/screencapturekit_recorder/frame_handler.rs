@@ -2,10 +2,9 @@ use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use super::state;
-use crate::services::camera;
+use crate::services::camera::CameraSyncHandle;
 use crate::services::time::cm_time_to_ns;
-use screencapturekit::cv::CVPixelBufferLockFlags;
+use screencapturekit::output::{CVImageBufferLockExt, PixelBufferLockFlags};
 use screencapturekit::prelude::*;
 
 static SCREEN_PTS_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -20,6 +19,9 @@ pub(super) struct FrameHandler {
     pub(super) audio_channel_count: Arc<AtomicU32>,
     pub(super) audio_layout_logged: Arc<AtomicBool>,
     pub(super) audio_samples_written: Arc<AtomicU64>,
+    pub(super) system_audio_muted: Arc<AtomicBool>,
+    pub(super) recording_paused: Arc<AtomicBool>,
+    pub(super) camera_sync: Option<Arc<CameraSyncHandle>>,
 }
 
 impl SCStreamOutputTrait for FrameHandler {
@@ -35,19 +37,26 @@ impl SCStreamOutputTrait for FrameHandler {
                         tick, screen_pts_ns, duration_ns
                     );
                 }
-                camera::emit_camera_frame_for_screen_pts(screen_pts_ns);
-                if state::recording_paused() {
+                if let Some(sync) = &self.camera_sync {
+                    sync.emit_for_screen_pts(screen_pts_ns);
+                }
+                if self.recording_paused.load(Ordering::Relaxed) {
                     return;
                 }
                 // Write video frame to FFmpeg stdin
                 if let Some(ref mut writer) = *self.video_writer.lock().unwrap() {
                     if let Some(buffer) = sample.image_buffer() {
-                        if let Ok(guard) = buffer.lock(CVPixelBufferLockFlags::READ_ONLY) {
+                        if let Ok(guard) = buffer.lock(PixelBufferLockFlags::ReadOnly) {
                             let pixels = guard.as_slice();
                             if writer.write_all(pixels).is_ok() {
-                                let count = self.video_frame_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                let count = self
+                                    .video_frame_count
+                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                 if count == 0 {
-                                    println!("[SCK] First video frame written ({} bytes)", pixels.len());
+                                    println!(
+                                        "[SCK] First video frame written ({} bytes)",
+                                        pixels.len()
+                                    );
                                 } else if count % 30 == 0 {
                                     println!("[SCK] Video frames: {}", count + 1);
                                 }
@@ -59,7 +68,7 @@ impl SCStreamOutputTrait for FrameHandler {
             SCStreamOutputType::Audio => {
                 // Write audio to named pipe (convert Float32 to s16le)
                 self.capture_audio_metadata(&sample);
-                if state::recording_paused() {
+                if self.recording_paused.load(Ordering::Relaxed) {
                     return;
                 }
                 let mut writer_guard = self.audio_writer.lock().unwrap();
@@ -126,7 +135,7 @@ impl SCStreamOutputTrait for FrameHandler {
                             return;
                         }
 
-                        if state::system_audio_muted() {
+                        if self.system_audio_muted.load(Ordering::Relaxed) {
                             s16_data.iter_mut().for_each(|b| *b = 0);
                         }
 
@@ -154,55 +163,55 @@ impl SCStreamOutputTrait for FrameHandler {
 
 impl FrameHandler {
     fn capture_audio_metadata(&self, sample: &CMSampleBuffer) {
-        let current_rate = self.audio_sample_rate.load(std::sync::atomic::Ordering::Relaxed);
-        let current_channels = self.audio_channel_count.load(std::sync::atomic::Ordering::Relaxed);
+        let current_rate = self
+            .audio_sample_rate
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let current_channels = self
+            .audio_channel_count
+            .load(std::sync::atomic::Ordering::Relaxed);
         if current_rate > 0 && current_channels > 0 {
             return;
         }
 
-        if let Some(format_desc) = sample.format_description() {
-            if current_rate == 0 {
-                if let Some(rate_hz) = format_desc.audio_sample_rate() {
-                    let detected_rate = rate_hz.round() as u32;
-                    if detected_rate > 0
-                        && self
-                            .audio_sample_rate
-                            .compare_exchange(
-                                0,
-                                detected_rate,
-                                Ordering::Relaxed,
-                                Ordering::Relaxed,
-                            )
-                            .is_ok()
-                    {
-                        println!(
-                            "[SCK] Detected system audio sample rate: {} Hz",
-                            detected_rate
-                        );
-                    }
-                }
-            }
+        // The screencapturekit crate no longer exposes helper accessors for
+        // CMFormatDescription audio properties. We detect channels from the
+        // audio buffers and keep a safe default sample rate when unset.
+        if current_channels == 0 {
+            if let Some(audio_buffers) = sample.audio_buffer_list() {
+                let detected_channels = if audio_buffers.num_buffers() > 1
+                    && audio_buffers.iter().all(|buffer| buffer.number_channels == 1)
+                {
+                    audio_buffers.num_buffers() as u32
+                } else {
+                    audio_buffers
+                        .get(0)
+                        .map(|buffer| buffer.number_channels.max(1))
+                        .unwrap_or(0)
+                };
 
-            if current_channels == 0 {
-                if let Some(detected_channels) = format_desc.audio_channel_count() {
-                    if detected_channels > 0
-                        && self
-                            .audio_channel_count
-                            .compare_exchange(
-                                0,
-                                detected_channels,
-                                Ordering::Relaxed,
-                                Ordering::Relaxed,
-                            )
-                            .is_ok()
-                    {
-                        println!(
-                            "[SCK] Detected system audio channels: {}",
-                            detected_channels
-                        );
-                    }
+                if detected_channels > 0
+                    && self
+                        .audio_channel_count
+                        .compare_exchange(
+                            0,
+                            detected_channels,
+                            Ordering::Relaxed,
+                            Ordering::Relaxed,
+                        )
+                        .is_ok()
+                {
+                    println!("[SCK] Detected system audio channels: {}", detected_channels);
                 }
             }
+        }
+
+        if current_rate == 0
+            && self
+                .audio_sample_rate
+                .compare_exchange(0, 48_000, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+        {
+            println!("[SCK] Defaulting system audio sample rate to 48000 Hz");
         }
     }
 

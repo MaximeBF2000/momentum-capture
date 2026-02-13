@@ -17,10 +17,6 @@ export function OverlayWindow() {
     getSettings()
       .then(settings => {
         setSettings(settings)
-        useRecordingStore.setState({
-          isMicEnabled: settings.micEnabled,
-          isCameraEnabled: settings.cameraEnabled
-        })
       })
       .catch(err => {
         console.error('Failed to load settings:', err)
@@ -28,21 +24,25 @@ export function OverlayWindow() {
 
     // Subscribe to recording events
     const unsubscribe = subscribeToRecordingEvents({
-      onStarted: () => {
+      onStarted: payload => {
         console.log('Recording started event received')
         setRecordingState('recording')
+        setElapsedTime(payload.elapsedMs)
       },
-      onPaused: () => {
+      onPaused: payload => {
         console.log('Recording paused event received')
         setRecordingState('paused')
+        setElapsedTime(payload.elapsedMs)
       },
-      onResumed: () => {
+      onResumed: payload => {
         console.log('Recording resumed event received')
         setRecordingState('recording')
+        setElapsedTime(payload.elapsedMs)
       },
-      onStopped: () => {
+      onStopped: payload => {
         console.log('Recording stopped event received')
         // Keep in stopping state until saved
+        setElapsedTime(payload.elapsedMs)
       },
       onSaved: () => {
         console.log('Recording saved event received')
@@ -52,49 +52,9 @@ export function OverlayWindow() {
         console.error('Recording error event received:', payload)
         setError(payload.message)
         reset()
-      }
-    })
-
-    // Timer logic - use ref to persist interval ID
-    const intervalIdRef = { current: null as number | null }
-
-    const startTimer = () => {
-      if (intervalIdRef.current !== null) {
-        return // Timer already running
-      }
-      intervalIdRef.current = window.setInterval(() => {
-        const state = useRecordingStore.getState()
-        if (state.recordingState === 'recording') {
-          setElapsedTime(state.elapsedTimeMs + 1000)
-        } else {
-          // Stop timer if not recording
-          if (intervalIdRef.current !== null) {
-            clearInterval(intervalIdRef.current)
-            intervalIdRef.current = null
-          }
-        }
-      }, 1000)
-    }
-
-    const stopTimer = () => {
-      if (intervalIdRef.current !== null) {
-        clearInterval(intervalIdRef.current)
-        intervalIdRef.current = null
-      }
-    }
-
-    // Start timer if already recording
-    const state = useRecordingStore.getState()
-    if (state.recordingState === 'recording') {
-      startTimer()
-    }
-
-    // Subscribe to state changes
-    const unsubscribeStore = useRecordingStore.subscribe(state => {
-      if (state.recordingState === 'recording') {
-        startTimer()
-      } else {
-        stopTimer()
+      },
+      onElapsed: payload => {
+        setElapsedTime(payload.elapsedMs)
       }
     })
 
@@ -110,8 +70,6 @@ export function OverlayWindow() {
 
     return () => {
       unsubscribe()
-      unsubscribeStore()
-      stopTimer()
       immersiveShortcutListener.then(unsub => unsub()).catch(() => {
         /* ignore */
       })
