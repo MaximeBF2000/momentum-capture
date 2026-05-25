@@ -158,6 +158,7 @@ impl Recorder {
         match self.sck_recorder.start(
             &output_file,
             options.include_microphone,
+            options.microphone_device_id,
             &ffmpeg_path,
             camera_sync,
         ) {

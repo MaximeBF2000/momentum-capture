@@ -1,7 +1,17 @@
 use crate::error::{AppError, AppResult};
+use crate::models::{AppSettings, CaptureDevice, CaptureDevices};
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::process::Command;
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct AvfDevice {
+    pub index: i32,
+    pub name: String,
+    pub unique_id: String,
+    pub is_default: bool,
+    pub is_builtin: bool,
+}
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct AvfResolved {
@@ -11,6 +21,10 @@ pub struct AvfResolved {
     pub audio_index_system_audio: Option<i32>,
     pub video_capture_device_count: Option<i32>,
     pub active_display_index_main: Option<i32>,
+    #[serde(default)]
+    pub audio_devices: Vec<AvfDevice>,
+    #[serde(default)]
+    pub video_devices: Vec<AvfDevice>,
 }
 
 impl AvfResolved {
@@ -32,6 +46,59 @@ impl AvfResolved {
     pub fn get_system_audio_index(&self) -> Option<i32> {
         self.audio_index_system_audio
     }
+
+    pub fn microphone_index_for(&self, selected_id: Option<&str>) -> AppResult<i32> {
+        if let Some(id) = selected_id {
+            if let Some(device) = self.audio_devices.iter().find(|device| device.unique_id == id) {
+                return Ok(device.index);
+            }
+        }
+
+        if let Some(device) = preferred_device(&self.audio_devices) {
+            return Ok(device.index);
+        }
+
+        self.get_mic_index()
+    }
+
+    pub fn camera_index_for(&self, selected_id: Option<&str>) -> AppResult<i32> {
+        if let Some(id) = selected_id {
+            if let Some(device) = self.video_devices.iter().find(|device| device.unique_id == id) {
+                return Ok(device.index);
+            }
+        }
+
+        if let Some(device) = preferred_device(&self.video_devices) {
+            return Ok(device.index);
+        }
+
+        self.get_camera_index()
+    }
+}
+
+pub fn list_capture_devices(settings: &AppSettings) -> AppResult<CaptureDevices> {
+    let resolved = resolve_avf_indices()?;
+    let selected_microphone = select_device_id(
+        &resolved.audio_devices,
+        settings.microphone_device_id.as_deref(),
+    );
+    let selected_camera =
+        select_device_id(&resolved.video_devices, settings.camera_device_id.as_deref());
+
+    Ok(CaptureDevices {
+        microphones: resolved
+            .audio_devices
+            .iter()
+            .map(capture_device_from_avf)
+            .collect(),
+        cameras: resolved
+            .video_devices
+            .iter()
+            .map(capture_device_from_avf)
+            .collect(),
+        selected_microphone_id: selected_microphone,
+        selected_camera_id: selected_camera,
+    })
 }
 
 pub fn resolve_avf_indices() -> AppResult<AvfResolved> {
@@ -89,8 +156,39 @@ pub fn resolve_avf_indices() -> AppResult<AvfResolved> {
         "[DeviceResolver]   System audio (BlackHole): {:?}",
         parsed.audio_index_system_audio
     );
+    println!("[DeviceResolver]   Audio devices: {}", parsed.audio_devices.len());
+    println!("[DeviceResolver]   Video devices: {}", parsed.video_devices.len());
 
     Ok(parsed)
+}
+
+fn preferred_device(devices: &[AvfDevice]) -> Option<&AvfDevice> {
+    devices
+        .iter()
+        .find(|device| device.is_default && device.is_builtin)
+        .or_else(|| devices.iter().find(|device| device.is_builtin))
+        .or_else(|| devices.iter().find(|device| device.is_default))
+        .or_else(|| devices.first())
+}
+
+fn select_device_id(devices: &[AvfDevice], selected_id: Option<&str>) -> Option<String> {
+    if let Some(id) = selected_id {
+        if devices.iter().any(|device| device.unique_id == id) {
+            return Some(id.to_string());
+        }
+    }
+
+    preferred_device(devices).map(|device| device.unique_id.clone())
+}
+
+fn capture_device_from_avf(device: &AvfDevice) -> CaptureDevice {
+    CaptureDevice {
+        id: device.unique_id.clone(),
+        name: device.name.clone(),
+        index: device.index,
+        is_default: device.is_default,
+        is_builtin: device.is_builtin,
+    }
 }
 
 fn get_resolver_path() -> AppResult<PathBuf> {

@@ -61,6 +61,9 @@ mod tests {
         let settings = AppSettings {
             mic_enabled: true,
             camera_enabled: true,
+            microphone_device_id: Some("mic-id".to_string()),
+            camera_device_id: Some("camera-id".to_string()),
+            hide_webcam_on_immersive_mode: false,
             immersive_shortcut: "Command+Shift+I".to_string(),
             save_location: Some("/tmp".to_string()),
         };
@@ -69,6 +72,9 @@ mod tests {
         let loaded = store.load().expect("load");
         assert_eq!(loaded.mic_enabled, true);
         assert_eq!(loaded.camera_enabled, true);
+        assert_eq!(loaded.microphone_device_id.as_deref(), Some("mic-id"));
+        assert_eq!(loaded.camera_device_id.as_deref(), Some("camera-id"));
+        assert_eq!(loaded.hide_webcam_on_immersive_mode, false);
         assert_eq!(loaded.immersive_shortcut, "Command+Shift+I");
         assert_eq!(loaded.save_location.as_deref(), Some("/tmp"));
     }

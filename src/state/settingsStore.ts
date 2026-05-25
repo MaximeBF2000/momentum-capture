@@ -14,6 +14,7 @@ export const useSettingsStore = create<SettingsStore>(set => ({
   settings: {
     micEnabled: false,
     cameraEnabled: false,
+    hideWebcamOnImmersiveMode: true,
     immersiveShortcut: 'Option+I'
   },
   setSettings: settings => set({ settings }),

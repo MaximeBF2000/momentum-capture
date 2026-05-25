@@ -8,6 +8,7 @@ describe('settingsStore', () => {
       settings: {
         micEnabled: false,
         cameraEnabled: false,
+        hideWebcamOnImmersiveMode: true,
         immersiveShortcut: 'Option+I'
       }
     })
@@ -28,10 +29,12 @@ describe('settingsStore', () => {
     store.setSettings({
       micEnabled: true,
       cameraEnabled: true,
+      hideWebcamOnImmersiveMode: false,
       immersiveShortcut: 'Command+Shift+I'
     })
 
     const updated = useSettingsStore.getState().settings
     expect(updated.immersiveShortcut).toBe('Command+Shift+I')
+    expect(updated.hideWebcamOnImmersiveMode).toBe(false)
   })
 })

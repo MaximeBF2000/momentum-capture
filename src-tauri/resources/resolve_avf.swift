@@ -18,6 +18,54 @@ func json(_ obj: Any) {
     }
 }
 
+func deviceObject(_ device: AVCaptureDevice, index: Int, defaultDevice: AVCaptureDevice?, builtin: Bool) -> [String: Any] {
+    return [
+        "index": index,
+        "name": device.localizedName,
+        "unique_id": device.uniqueID,
+        "is_default": defaultDevice.map { $0 == device } ?? false,
+        "is_builtin": builtin
+    ]
+}
+
+func audioDevices() -> [[String: Any]] {
+    let audio = AVCaptureDevice.DiscoverySession(
+        deviceTypes: [.microphone],
+        mediaType: .audio,
+        position: .unspecified
+    ).devices
+    let defaultDevice = AVCaptureDevice.default(for: .audio)
+
+    return audio.enumerated().map { index, device in
+        let uniqueID = device.uniqueID.lowercased()
+        let builtin = device.transportType == 0
+            || uniqueID.contains("apple")
+            || uniqueID.contains("builtin")
+            || uniqueID.contains("internal")
+        return deviceObject(device, index: index, defaultDevice: defaultDevice, builtin: builtin)
+    }
+}
+
+func cameraDevices() -> [[String: Any]] {
+    let deviceTypes: [AVCaptureDevice.DeviceType] = if #available(macOS 14.0, *) {
+        [.builtInWideAngleCamera, .external]
+    } else {
+        [.builtInWideAngleCamera, .externalUnknown]
+    }
+
+    let video = AVCaptureDevice.DiscoverySession(
+        deviceTypes: deviceTypes,
+        mediaType: .video,
+        position: .unspecified
+    ).devices
+    let defaultDevice = AVCaptureDevice.default(for: .video)
+
+    return video.enumerated().map { index, device in
+        let builtin = device.deviceType == .builtInWideAngleCamera
+        return deviceObject(device, index: index, defaultDevice: defaultDevice, builtin: builtin)
+    }
+}
+
 func indexOfBuiltInMic() -> Int? {
     let audio = AVCaptureDevice.DiscoverySession(
         deviceTypes: [.microphone],
@@ -165,6 +213,8 @@ let cam = indexOfBuiltInCamera()
 let screenIdx = mainDisplayScreenIndex()
 let camCount = videoCaptureDeviceCount()
 let systemAudio = indexOfSystemAudio()
+let audio = audioDevices()
+let video = cameraDevices()
 
 // FFmpeg's avfoundation lists devices as: [cameras...][screens...]
 // So we need to find the screen index in FFmpeg's enumeration
@@ -190,6 +240,7 @@ json([
     "video_index_main_screen": screenVideoIndex as Any,
     "audio_index_system_audio": systemAudio as Any,
     "video_capture_device_count": camCount,
-    "active_display_index_main": screenIdx as Any
+    "active_display_index_main": screenIdx as Any,
+    "audio_devices": audio,
+    "video_devices": video
 ])
-

@@ -21,6 +21,7 @@ pub fn start_recording(
     recording_paused: &Arc<AtomicBool>,
     output_path: &PathBuf,
     mic_enabled: bool,
+    microphone_device_id: Option<String>,
     ffmpeg_path: &Path,
     camera_sync: Option<Arc<CameraSyncHandle>>,
 ) -> AppResult<()> {
@@ -66,7 +67,7 @@ pub fn start_recording(
     // Resolve mic device if needed
     let mic_index = if mic_enabled {
         let resolved = device_resolver::resolve_avf_indices()?;
-        let idx = resolved.audio_index_builtin_mic.unwrap_or(0);
+        let idx = resolved.microphone_index_for(microphone_device_id.as_deref())?;
         println!("[SCK] Mic device index: {}", idx);
         idx
     } else {

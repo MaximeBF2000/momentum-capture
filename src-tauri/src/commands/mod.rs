@@ -6,9 +6,10 @@ use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::error::{AppError, AppResult};
-use crate::models::{AppSettings, RecordingOptions};
+use crate::models::{AppSettings, CaptureDevices, RecordingOptions};
 use crate::services::camera::CameraPreview;
 use crate::services::immersive::ImmersiveMode;
+use crate::services::platform::device_resolver;
 use crate::services::recording::{
     Recorder, RecordingPausedInfo, RecordingResumedInfo, RecordingStoppedInfo,
 };
@@ -34,9 +35,17 @@ pub async fn start_recording(
                 if options.include_camera {
                     let immersive_state = app_handle.state::<Arc<Mutex<ImmersiveMode>>>();
                     let camera_preview = app_handle.state::<Mutex<CameraPreview>>();
+                    let settings_store = app_handle.state::<SettingsStore>();
+                    let settings = settings_store.load().unwrap_or_default();
                     let immersive = is_immersive_enabled(&immersive_state);
-                    if let Err(err) =
-                        apply_camera_overlay_visibility(&app_handle, &camera_preview, true, immersive)
+                    let hide_for_immersive =
+                        immersive && settings.hide_webcam_on_immersive_mode;
+                    if let Err(err) = apply_camera_overlay_visibility(
+                        &app_handle,
+                        &camera_preview,
+                        true,
+                        hide_for_immersive,
+                    )
                     {
                         let _ = app_handle.emit(
                             "recording-error",
@@ -99,11 +108,13 @@ pub async fn stop_recording(
                 let settings_store = app_handle.state::<SettingsStore>();
                 if let Ok(settings) = settings_store.load() {
                     let immersive = is_immersive_enabled(&immersive_state);
+                    let hide_for_immersive =
+                        immersive && settings.hide_webcam_on_immersive_mode;
                     if let Err(err) = apply_camera_overlay_visibility(
                         &app_handle,
                         &camera_preview,
                         settings.camera_enabled,
-                        immersive,
+                        hide_for_immersive,
                     ) {
                         let _ = app_handle.emit(
                             "recording-error",
@@ -137,12 +148,36 @@ pub async fn get_settings(settings_store: State<'_, SettingsStore>) -> AppResult
 }
 
 #[tauri::command]
+pub async fn get_default_settings() -> AppSettings {
+    AppSettings::default()
+}
+
+#[tauri::command]
+pub async fn list_capture_devices(
+    settings_store: State<'_, SettingsStore>,
+) -> AppResult<CaptureDevices> {
+    let settings = settings_store.load()?;
+    device_resolver::list_capture_devices(&settings)
+}
+
+#[tauri::command]
 pub async fn update_settings(
     settings: AppSettings,
     settings_store: State<'_, SettingsStore>,
     app: AppHandle,
 ) -> AppResult<()> {
+    let current = settings_store.load().unwrap_or_default();
     settings_store.save(&settings)?;
+
+    if current.immersive_shortcut != settings.immersive_shortcut {
+        crate::update_toggle_menu_shortcut(&app, &settings.immersive_shortcut)?;
+        crate::register_immersive_shortcut_handler(&app, &settings.immersive_shortcut)?;
+        app.emit(
+            "immersive-shortcut-updated",
+            json!({ "shortcut": settings.immersive_shortcut }),
+        )?;
+    }
+
     app.emit("settings-updated", settings.clone())?;
     Ok(())
 }
@@ -171,7 +206,10 @@ pub async fn set_camera_overlay_visible(
     immersive_mode: State<'_, Arc<Mutex<ImmersiveMode>>>,
 ) -> AppResult<()> {
     let immersive = is_immersive_enabled(&immersive_mode);
-    apply_camera_overlay_visibility(&app, &camera_preview, visible, immersive)
+    let settings_store = app.state::<SettingsStore>();
+    let settings = settings_store.load().unwrap_or_default();
+    let hide_for_immersive = immersive && settings.hide_webcam_on_immersive_mode;
+    apply_camera_overlay_visibility(&app, &camera_preview, visible, hide_for_immersive)
 }
 
 #[tauri::command]
@@ -269,11 +307,13 @@ fn apply_camera_overlay_visibility(
         .ok_or_else(|| AppError::Camera("Camera overlay window not found".to_string()))?;
 
     if requested_visible {
+        let settings_store = app.state::<SettingsStore>();
+        let settings = settings_store.load().unwrap_or_default();
         {
             let mut preview = camera_preview.lock().unwrap();
             preview.set_app_handle(app.clone());
             if !preview.is_running() {
-                preview.start()?;
+                preview.start(settings.camera_device_id.clone())?;
             }
         }
 
@@ -315,8 +355,14 @@ fn apply_immersive_state(
     }
 
     let settings_store = app.state::<SettingsStore>();
-    let camera_enabled = settings_store.load()?.camera_enabled;
-    apply_camera_overlay_visibility(app, camera_preview, camera_enabled, enabled)?;
+    let settings = settings_store.load()?;
+    let hide_for_immersive = enabled && settings.hide_webcam_on_immersive_mode;
+    apply_camera_overlay_visibility(
+        app,
+        camera_preview,
+        settings.camera_enabled,
+        hide_for_immersive,
+    )?;
 
     app.emit(
         "immersive-mode-changed",

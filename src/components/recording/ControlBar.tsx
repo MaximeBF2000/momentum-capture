@@ -73,7 +73,9 @@ export function ControlBar() {
             setRecordingState('recording')
             await startRecording({
               includeMicrophone: settings.micEnabled,
-              includeCamera: settings.cameraEnabled
+              includeCamera: settings.cameraEnabled,
+              microphoneDeviceId: settings.microphoneDeviceId,
+              cameraDeviceId: settings.cameraDeviceId
             })
             console.log('Recording command sent successfully')
           } catch (err: any) {

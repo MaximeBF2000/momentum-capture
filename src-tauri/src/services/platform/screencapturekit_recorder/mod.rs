@@ -39,6 +39,7 @@ impl ScreenCaptureKitRecorder {
         &self,
         output_path: &PathBuf,
         mic_enabled: bool,
+        microphone_device_id: Option<String>,
         ffmpeg_path: &Path,
         camera_sync: Option<Arc<CameraSyncHandle>>,
     ) -> AppResult<()> {
@@ -54,6 +55,7 @@ impl ScreenCaptureKitRecorder {
             &self.recording_paused,
             output_path,
             mic_enabled,
+            microphone_device_id,
             ffmpeg_path,
             camera_sync,
         )

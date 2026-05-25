@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
-import type { RecordingOptions, AppSettings } from '../types'
+import type { RecordingOptions, AppSettings, CaptureDevices } from '../types'
 
 export const startRecording = async (
   options: RecordingOptions
@@ -21,6 +21,14 @@ export const stopRecording = async (): Promise<void> => {
 
 export const getSettings = async (): Promise<AppSettings> => {
   return await invoke('get_settings')
+}
+
+export const getDefaultSettings = async (): Promise<AppSettings> => {
+  return await invoke('get_default_settings')
+}
+
+export const listCaptureDevices = async (): Promise<CaptureDevices> => {
+  return await invoke('list_capture_devices')
 }
 
 export const updateSettings = async (settings: AppSettings): Promise<void> => {

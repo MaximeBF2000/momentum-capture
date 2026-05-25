@@ -49,6 +49,8 @@ pub fn run() {
             commands::resume_recording,
             commands::stop_recording,
             commands::get_settings,
+            commands::get_default_settings,
+            commands::list_capture_devices,
             commands::update_settings,
             commands::toggle_settings_window,
             commands::set_camera_overlay_visible,
@@ -108,7 +110,7 @@ fn initialize_camera_overlay(app: &tauri::AppHandle, settings: &AppSettings) -> 
         let mut preview = camera_state.lock().unwrap();
         preview.set_app_handle(app.clone());
         if !preview.is_running() {
-            preview.start()?;
+            preview.start(settings.camera_device_id.clone())?;
         }
     } else if let Some(window) = app.get_webview_window("camera-overlay") {
         window.hide()?;

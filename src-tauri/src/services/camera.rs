@@ -305,6 +305,7 @@ impl CameraSyncHandle {
 
 pub struct CameraPreview {
     is_running: Arc<Mutex<bool>>,
+    active_device_id: Arc<Mutex<Option<String>>>,
     sync_handle: Arc<CameraSyncHandle>,
     ffmpeg_locator: Arc<FfmpegLocator>,
 }
@@ -314,6 +315,7 @@ impl CameraPreview {
         let handle = Arc::new(CameraSyncHandle::new());
         Self {
             is_running: Arc::new(Mutex::new(false)),
+            active_device_id: Arc::new(Mutex::new(None)),
             sync_handle: handle,
             ffmpeg_locator,
         }
@@ -331,12 +333,58 @@ impl CameraPreview {
         *self.is_running.lock().unwrap()
     }
 
-    pub fn start(&self) -> AppResult<()> {
-        let mut is_running = self.is_running.lock().unwrap();
+    pub fn start(&self, camera_device_id: Option<String>) -> AppResult<()> {
+        {
+            let is_running = self.is_running.lock().unwrap();
+            if *is_running {
+                let active = self.active_device_id.lock().unwrap();
+                if *active == camera_device_id {
+                    return Ok(());
+                }
+                return Err(AppError::Camera(
+                    "Camera preview is already running. Disable and re-enable the camera to switch devices.".to_string(),
+                ));
+            }
+        }
 
-        if *is_running {
-            // Already running, just return success
-            return Ok(());
+        let resolved = match device_resolver::resolve_avf_indices() {
+            Ok(devices) => devices,
+            Err(e) => {
+                eprintln!(
+                    "[CameraPreview] Failed to resolve device indices: {}, falling back to 0",
+                    e
+                );
+                *self.active_device_id.lock().unwrap() = None;
+                *self.is_running.lock().unwrap() = true;
+                return self.start_ffmpeg(0);
+            }
+        };
+
+        let camera_index = match resolved.camera_index_for(camera_device_id.as_deref()) {
+            Ok(idx) => {
+                println!("[CameraPreview] Resolved camera index: {}", idx);
+                idx
+            }
+            Err(e) => {
+                eprintln!(
+                    "[CameraPreview] Failed to resolve camera index: {}, falling back to 0",
+                    e
+                );
+                0
+            }
+        };
+
+        *self.active_device_id.lock().unwrap() = camera_device_id;
+        *self.is_running.lock().unwrap() = true;
+        self.start_ffmpeg(camera_index)
+    }
+
+    fn start_ffmpeg(&self, camera_index: i32) -> AppResult<()> {
+        {
+            let is_running = self.is_running.lock().unwrap();
+            if !*is_running {
+                return Ok(());
+            }
         }
 
         let ffmpeg_path = self
@@ -349,35 +397,9 @@ impl CameraPreview {
             ffmpeg_path.display()
         );
 
-        let camera_index = match device_resolver::resolve_avf_indices() {
-            Ok(devices) => match devices.get_camera_index() {
-                Ok(idx) => {
-                    println!("[CameraPreview] Resolved built-in camera index: {}", idx);
-                    idx
-                }
-                Err(e) => {
-                    eprintln!(
-                        "[CameraPreview] Failed to resolve camera index: {}, falling back to 0",
-                        e
-                    );
-                    0
-                }
-            },
-            Err(e) => {
-                eprintln!(
-                    "[CameraPreview] Failed to resolve device indices: {}, falling back to 0",
-                    e
-                );
-                0
-            }
-        };
-
-        *is_running = true;
-
         let is_running_clone = self.is_running.clone();
         let sync_handle_clone = self.sync_handle.clone();
 
-        // Start FFmpeg in a separate thread
         let ffmpeg_path_clone = ffmpeg_path.clone();
         let camera_index_clone = camera_index;
         thread::spawn(move || {
@@ -391,20 +413,20 @@ impl CameraPreview {
                 "-video_size",
                 "640x480",
                 "-i",
-                &format!("{}:", camera_index_clone), // Built-in camera, no audio
+                &format!("{}:", camera_index_clone),
                 "-vf",
-                "fps=30", // Keep at 30 fps for smooth preview
+                "fps=30",
                 "-f",
                 "image2pipe",
                 "-vcodec",
                 "mjpeg",
                 "-q:v",
-                "3", // Lower quality number = higher quality but faster encoding
+                "3",
                 "-",
             ]);
 
             cmd.stdout(Stdio::piped());
-            cmd.stderr(Stdio::piped()); // Capture stderr for debugging
+            cmd.stderr(Stdio::piped());
 
             let mut process = match cmd.spawn() {
                 Ok(p) => {
@@ -435,7 +457,6 @@ impl CameraPreview {
                 }
             };
 
-            // Read stderr in a separate thread to capture errors (but don't log everything)
             let stderr = process.stderr.take();
             if let Some(mut stderr) = stderr {
                 let is_running_err = is_running_clone.clone();
@@ -445,7 +466,6 @@ impl CameraPreview {
                         if let Ok(n) = stderr.read(&mut buffer) {
                             if n > 0 {
                                 let error_msg = String::from_utf8_lossy(&buffer[..n]);
-                                // Only log actual errors, not warnings or info
                                 if error_msg.contains("Error") || error_msg.contains("error") {
                                     eprintln!("Camera FFmpeg error: {}", error_msg);
                                 }
@@ -457,19 +477,18 @@ impl CameraPreview {
 
             let mut stdout = process.stdout.take().unwrap();
             let mut frame_id = 0u64;
-            let mut jpeg_data = Vec::with_capacity(50000); // Pre-allocate for typical JPEG size
-            let mut buffer = [0u8; 65536]; // Larger buffer for better performance
+            let mut jpeg_data = Vec::with_capacity(50000);
+            let mut buffer = [0u8; 65536];
             let mut found_start = false;
             let mut last_frame_time = std::time::Instant::now();
 
             while *is_running_clone.lock().unwrap() {
                 match stdout.read(&mut buffer) {
-                    Ok(0) => break, // EOF
+                    Ok(0) => break,
                     Ok(n) => {
                         for i in 0..n {
                             let byte = buffer[i];
 
-                            // Look for JPEG start marker (FF D8)
                             if !found_start
                                 && i < n - 1
                                 && buffer[i] == 0xFF
@@ -481,13 +500,10 @@ impl CameraPreview {
                             } else if found_start {
                                 jpeg_data.push(byte);
 
-                                // Check for JPEG end marker (FF D9)
                                 if jpeg_data.len() >= 2
                                     && jpeg_data[jpeg_data.len() - 2] == 0xFF
                                     && jpeg_data[jpeg_data.len() - 1] == 0xD9
                                 {
-                                    // Complete JPEG frame found
-                                    // Only emit if enough time has passed (throttle to ~30 FPS max)
                                     let now = std::time::Instant::now();
                                     if now.duration_since(last_frame_time).as_millis() >= 33 {
                                         let base64_frame =
@@ -530,6 +546,7 @@ impl CameraPreview {
         }
 
         *is_running = false;
+        *self.active_device_id.lock().unwrap() = None;
         self.sync_handle.set_sync_enabled(false);
         self.sync_handle.clear();
 
