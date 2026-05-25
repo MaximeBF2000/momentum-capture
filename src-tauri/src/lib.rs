@@ -50,6 +50,7 @@ pub fn run() {
             commands::stop_recording,
             commands::get_settings,
             commands::update_settings,
+            commands::toggle_settings_window,
             commands::set_camera_overlay_visible,
             commands::toggle_microphone_during_recording,
             commands::set_mic_muted,
@@ -68,9 +69,14 @@ fn position_overlay_windows(app: &tauri::AppHandle) {
             if let Some(monitor) = monitor {
                 if let Ok(window_size) = overlay_window.outer_size() {
                     let monitor_size = monitor.size();
-                    let x = monitor_size.width as i32 - window_size.width as i32 - 20;
+                    let monitor_position = monitor.position();
+                    let x = monitor_position.x + monitor_size.width as i32
+                        - window_size.width as i32
+                        - 20;
+                    let y = monitor_position.y
+                        + (monitor_size.height as i32 - window_size.height as i32) / 2;
                     overlay_window
-                        .set_position(PhysicalPosition::new(x, 20))
+                        .set_position(PhysicalPosition::new(x, y))
                         .ok();
                 }
             }

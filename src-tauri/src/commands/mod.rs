@@ -1,6 +1,6 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -24,7 +24,8 @@ pub async fn start_recording(
 
     tauri::async_runtime::spawn(async move {
         let recorder = app_handle.state::<Recorder>().clone();
-        let result = recorder.start(options_clone);
+        let result = build_staging_output_path(&app_handle)
+            .and_then(|output_path| recorder.start_with_output_path(options_clone, output_path));
         match result {
             Ok(info) => {
                 recorder.start_elapsed_task(app_handle.clone());
@@ -143,6 +144,22 @@ pub async fn update_settings(
 ) -> AppResult<()> {
     settings_store.save(&settings)?;
     app.emit("settings-updated", settings.clone())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn toggle_settings_window(app: AppHandle) -> AppResult<()> {
+    let window = app
+        .get_webview_window("settings")
+        .ok_or_else(|| AppError::Settings("Settings window is not registered".into()))?;
+
+    if window.is_visible()? {
+        window.hide()?;
+    } else {
+        window.show()?;
+        window.set_focus()?;
+    }
+
     Ok(())
 }
 
@@ -309,12 +326,13 @@ fn apply_immersive_state(
 }
 
 fn save_recording_file(app: &AppHandle, temp_path: PathBuf) -> AppResult<()> {
+    let save_start = Instant::now();
     let settings_store = app.state::<SettingsStore>();
     let settings = settings_store.load().unwrap_or_default();
-    let target_dir = resolve_output_dir(&settings)?;
+    let target_dir = resolve_final_output_dir(&temp_path, &settings)?;
     std::fs::create_dir_all(&target_dir)?;
     let timestamp = current_time_seconds();
-    let final_path = target_dir.join(format!("momentum-recording-{}.mp4", timestamp));
+    let final_path = available_recording_path(&target_dir, timestamp);
 
     if !temp_path.exists() {
         return Err(AppError::Recording(format!(
@@ -323,7 +341,7 @@ fn save_recording_file(app: &AppHandle, temp_path: PathBuf) -> AppResult<()> {
         )));
     }
 
-    std::fs::copy(&temp_path, &final_path)?;
+    move_recording_into_place(&temp_path, &final_path)?;
     if !final_path.exists() {
         return Err(AppError::Recording(format!(
             "Output file was not created: {:?}",
@@ -331,7 +349,11 @@ fn save_recording_file(app: &AppHandle, temp_path: PathBuf) -> AppResult<()> {
         )));
     }
 
-    let _ = std::fs::remove_file(&temp_path);
+    println!(
+        "[Recording] Final recording available at {:?} in {:?}",
+        final_path,
+        save_start.elapsed()
+    );
 
     app.emit(
         "recording-saved",
@@ -339,6 +361,90 @@ fn save_recording_file(app: &AppHandle, temp_path: PathBuf) -> AppResult<()> {
     )?;
 
     Ok(())
+}
+
+fn build_staging_output_path(app: &AppHandle) -> AppResult<PathBuf> {
+    let settings_store = app.state::<SettingsStore>();
+    let settings = settings_store.load().unwrap_or_default();
+    let target_dir = resolve_output_dir(&settings)?;
+    std::fs::create_dir_all(&target_dir)?;
+    let path = target_dir.join(format!(
+        ".momentum-recording-{}-{}.inprogress.mp4",
+        current_time_seconds(),
+        current_time_millis()
+    ));
+    println!("[Recording] Staging recording output at {:?}", path);
+    Ok(path)
+}
+
+fn resolve_final_output_dir(staged_path: &Path, settings: &AppSettings) -> AppResult<PathBuf> {
+    if is_momentum_staging_file(staged_path) {
+        if let Some(parent) = staged_path.parent() {
+            return Ok(parent.to_path_buf());
+        }
+    }
+
+    resolve_output_dir(settings)
+}
+
+fn move_recording_into_place(temp_path: &PathBuf, final_path: &PathBuf) -> AppResult<()> {
+    if same_path(temp_path, final_path) {
+        return Ok(());
+    }
+
+    match std::fs::rename(temp_path, final_path) {
+        Ok(_) => {
+            println!(
+                "[Recording] Moved recording into place with filesystem rename: {:?} -> {:?}",
+                temp_path, final_path
+            );
+            Ok(())
+        }
+        Err(rename_err) => {
+            println!(
+                "[Recording] Rename failed ({}); falling back to copy: {:?} -> {:?}",
+                rename_err, temp_path, final_path
+            );
+            std::fs::copy(temp_path, final_path)?;
+            if final_path.exists() {
+                let _ = std::fs::remove_file(temp_path);
+            }
+            Ok(())
+        }
+    }
+}
+
+fn same_path(left: &Path, right: &Path) -> bool {
+    left == right
+}
+
+fn is_momentum_staging_file(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| {
+            name.starts_with(".momentum-recording-") && name.ends_with(".inprogress.mp4")
+        })
+        .unwrap_or(false)
+}
+
+fn available_recording_path(target_dir: &PathBuf, timestamp: u64) -> PathBuf {
+    let first = target_dir.join(format!("momentum-recording-{}.mp4", timestamp));
+    if !first.exists() {
+        return first;
+    }
+
+    for suffix in 1..1000 {
+        let candidate = target_dir.join(format!("momentum-recording-{}-{}.mp4", timestamp, suffix));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+
+    target_dir.join(format!(
+        "momentum-recording-{}-{}.mp4",
+        timestamp,
+        current_time_millis()
+    ))
 }
 
 fn resolve_output_dir(settings: &AppSettings) -> AppResult<PathBuf> {
@@ -356,4 +462,11 @@ fn current_time_seconds() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_else(|_| Duration::from_secs(0))
         .as_secs()
+}
+
+fn current_time_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_else(|_| Duration::from_secs(0))
+        .as_millis()
 }

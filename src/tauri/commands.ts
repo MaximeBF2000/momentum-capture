@@ -27,6 +27,10 @@ export const updateSettings = async (settings: AppSettings): Promise<void> => {
   await invoke('update_settings', { settings })
 }
 
+export const toggleSettingsWindow = async (): Promise<void> => {
+  await invoke('toggle_settings_window')
+}
+
 export const setCameraOverlayVisible = async (
   visible: boolean
 ): Promise<void> => {

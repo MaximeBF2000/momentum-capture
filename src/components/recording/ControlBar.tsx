@@ -7,7 +7,8 @@ import {
   Camera,
   CameraOff,
   Volume2,
-  VolumeX
+  VolumeX,
+  Settings
 } from 'lucide-react'
 import { useRecordingStore } from '../../state/recordingStore'
 import { TimerDisplay } from './TimerDisplay'
@@ -20,7 +21,8 @@ import {
   setCameraOverlayVisible,
   updateSettings,
   setMicMuted,
-  setSystemAudioMuted
+  setSystemAudioMuted,
+  toggleSettingsWindow
 } from '../../tauri/commands'
 import { useSettingsStore } from '../../state/settingsStore'
 
@@ -172,111 +174,110 @@ export function ControlBar() {
     }
   }
 
+  const handleSettingsToggle = async () => {
+    try {
+      await toggleSettingsWindow()
+    } catch (err: any) {
+      console.error('Failed to toggle settings window:', err)
+      setError(err.message || 'Failed to toggle settings window')
+    }
+  }
+
   const isRecording = recordingState === 'recording'
   const isPaused = recordingState === 'paused'
   const isIdle = recordingState === 'idle'
   const isCountdown = recordingState === 'countdown'
+  const isStopping = recordingState === 'stopping'
+  const isBusy = isCountdown || isStopping
+  const buttonBase =
+    'cursor-pointer w-8 h-8 rounded flex items-center justify-center transition-colors disabled:opacity-45 disabled:cursor-not-allowed'
+  const inactiveButton = 'bg-neutral-800/95 hover:bg-neutral-700/95'
 
   return (
-    <div className="relative">
+    <div className="h-full relative flex items-center justify-center">
       <div
         style={{
-          padding: '10px',
           userSelect: 'none',
           WebkitUserSelect: 'none'
         }}
-        className="flex items-center gap-x-6 bg-neutral-900 backdrop-blur-md rounded-full border border-neutral-700/60 select-none"
+        className="flex h-80 w-14 flex-col items-center justify-center rounded-2xl border border-neutral-700/70 bg-neutral-950 backdrop-blur-md select-none gap-4"
         data-tauri-drag-region="true"
       >
-        {/* Recording Indicator */}
-        <div className="flex items-center gap-2 pointer-events-none select-none">
+        <div className="flex flex-col items-center gap-2 pointer-events-none select-none">
           <div
-            className={`w-2 h-2 rounded-full ${
+            className={`h-2.5 w-2.5 rounded-full ${
               isRecording ? 'bg-red-500' : 'bg-neutral-600'
             }`}
+            aria-label={isRecording ? 'Recording' : 'Not recording'}
           />
-          <span
-            className={`text-xs uppercase ${
-              isRecording ? 'text-neutral-200' : 'text-neutral-500'
-            }`}
-          >
-            RECORDING
-          </span>
+          <TimerDisplay
+            compact
+            className="font-mono text-[11px] leading-none text-neutral-300"
+          />
         </div>
 
-        {/* Timer */}
-        <TimerDisplay />
-
-        {/* Divider */}
-        <div className="w-px h-6 bg-neutral-700" />
-
-        {/* Control Buttons */}
-        <div className="flex items-center gap-2">
-          {/* Pause/Resume Button */}
+        <div className="flex flex-col items-center gap-2">
           <button
             onClick={handlePause}
-            disabled={isIdle || isCountdown || recordingState === 'stopping'}
-            className="w-8 h-8 rounded-full bg-white flex items-center justify-center hover:bg-neutral-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            disabled={isIdle || isCountdown || isStopping}
+            className={`${buttonBase} bg-neutral-200 hover:bg-white`}
             aria-label={isPaused ? 'Resume' : 'Pause'}
             data-tauri-drag-region="false"
           >
             {isPaused ? (
-              <Play className="w-4 h-4 text-black" fill="black" />
+              <Play className="w-5 h-5 text-black" fill="black" />
             ) : (
-              <Pause className="w-4 h-4 text-black" fill="black" />
+              <Pause className="w-5 h-5 text-black" fill="black" />
             )}
           </button>
 
-          {/* Start/Stop Button */}
           {isIdle || isCountdown ? (
             <button
               onClick={handleStart}
               disabled={isCountdown}
-              className="cursor-pointer w-8 h-8 rounded-full bg-white flex items-center justify-center hover:bg-neutral-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className={`${buttonBase} bg-neutral-200 hover:bg-white`}
               aria-label="Start Recording"
               data-tauri-drag-region="false"
             >
-              <Play className="w-4 h-4 text-black" fill="black" />
+              <Play className="w-5 h-5 text-black" fill="black" />
             </button>
           ) : (
             <button
               onClick={handleStop}
-              disabled={recordingState === 'stopping'}
-              className="cursor-pointer w-8 h-8 rounded-full bg-red-500 flex items-center justify-center hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              disabled={isStopping}
+              className={`${buttonBase} bg-red-500 hover:bg-red-600`}
               aria-label="Stop Recording"
               data-tauri-drag-region="false"
             >
-              <Square className="w-4 h-4 text-white" fill="white" />
+              <Square className="w-5 h-5 text-white" fill="white" />
             </button>
           )}
 
-          {/* Microphone Mute Toggle */}
           <button
             onClick={handleMicMuteToggle}
-            disabled={isCountdown || recordingState === 'stopping'}
-            className={`cursor-pointer w-8 h-8 rounded-full flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+            disabled={isBusy}
+            className={`${buttonBase} ${
               !isMicMuted
-                ? 'bg-neutral-800 border-2 border-green-500'
-                : 'bg-neutral-800 hover:bg-neutral-700'
+                ? 'border border-green-500/80 bg-neutral-800/95'
+                : inactiveButton
             }`}
             aria-label={isMicMuted ? 'Unmute Microphone' : 'Mute Microphone'}
             data-tauri-drag-region="false"
           >
             {!isMicMuted ? (
-              <Mic className="w-4 h-4 text-green-500" />
+              <Mic className="w-5 h-5 text-green-500" />
             ) : (
-              <MicOff className="w-4 h-4 text-neutral-400" />
+              <MicOff className="w-5 h-5 text-neutral-400" />
             )}
           </button>
 
-          {/* System Audio Mute Toggle */}
           <button
             onClick={handleSystemAudioMuteToggle}
-            disabled={isCountdown || recordingState === 'stopping'}
-            className={`cursor-pointer w-8 h-8 rounded-full flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+            disabled={isBusy}
+            className={`${buttonBase} ${
               !isSystemAudioMuted
-                ? 'bg-neutral-800 border-2 border-green-500'
-                : 'bg-neutral-800 hover:bg-neutral-700'
+                ? 'border border-green-500/80 bg-neutral-800/95'
+                : inactiveButton
             }`}
             aria-label={
               isSystemAudioMuted ? 'Unmute System Audio' : 'Mute System Audio'
@@ -284,33 +285,44 @@ export function ControlBar() {
             data-tauri-drag-region="false"
           >
             {!isSystemAudioMuted ? (
-              <Volume2 className="w-4 h-4 text-green-500" />
+              <Volume2 className="w-5 h-5 text-green-500" />
             ) : (
-              <VolumeX className="w-4 h-4 text-neutral-400" />
+              <VolumeX className="w-5 h-5 text-neutral-400" />
             )}
           </button>
 
-          {/* Camera Toggle */}
           <button
             onClick={handleCameraToggle}
-            disabled={isCountdown || recordingState === 'stopping'}
-            className={`cursor-pointer w-8 h-8 rounded-full flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+            disabled={isBusy}
+            className={`${buttonBase} ${
               settings.cameraEnabled
-                ? 'bg-neutral-800 border-2 border-blue-500'
-                : 'bg-neutral-800 hover:bg-neutral-700'
+                ? 'border border-blue-500/80 bg-neutral-800/95'
+                : inactiveButton
             }`}
-            aria-label={settings.cameraEnabled ? 'Disable Camera' : 'Enable Camera'}
+            aria-label={
+              settings.cameraEnabled ? 'Disable Camera' : 'Enable Camera'
+            }
             data-tauri-drag-region="false"
           >
             {settings.cameraEnabled ? (
-              <Camera className="w-4 h-4 text-blue-500" />
+              <Camera className="w-5 h-5 text-blue-500" />
             ) : (
-              <CameraOff className="w-4 h-4 text-neutral-400" />
+              <CameraOff className="w-5 h-5 text-neutral-400" />
             )}
+          </button>
+
+          <div className="my-0.5 h-px w-8 bg-neutral-700/80" />
+
+          <button
+            onClick={handleSettingsToggle}
+            className={`${buttonBase} ${inactiveButton}`}
+            aria-label="Toggle Settings"
+            data-tauri-drag-region="false"
+          >
+            <Settings className="w-5 h-5 text-neutral-300" />
           </button>
         </div>
       </div>
-      {/* Countdown Overlay */}
       {isCountdown && <Countdown />}
     </div>
   )

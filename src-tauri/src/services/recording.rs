@@ -10,7 +10,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
 use tokio::sync::watch;
-use uuid::Uuid;
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -132,9 +131,11 @@ impl Recorder {
         }
     }
 
-    pub fn start(&self, options: RecordingOptions) -> AppResult<RecordingStartInfo> {
-        let output_file = self.build_output_path();
-
+    pub fn start_with_output_path(
+        &self,
+        options: RecordingOptions,
+        output_file: PathBuf,
+    ) -> AppResult<RecordingStartInfo> {
         {
             let mut state = self.state.lock().unwrap();
             if state.is_recording {
@@ -301,11 +302,6 @@ impl Recorder {
         }
     }
 
-    fn build_output_path(&self) -> PathBuf {
-        let temp_dir = std::env::temp_dir();
-        let recording_id = Uuid::new_v4();
-        temp_dir.join(format!("momentum_screen_{}.mp4", recording_id))
-    }
 }
 
 fn elapsed_ms_from_clock(clock: &Arc<Mutex<RecordingClock>>) -> u64 {

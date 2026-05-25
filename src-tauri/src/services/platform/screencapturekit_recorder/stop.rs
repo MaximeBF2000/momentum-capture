@@ -3,6 +3,7 @@ use std::process::Command;
 use std::sync::atomic::Ordering;
 use std::sync::Mutex;
 use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::error::{AppError, AppResult};
 
@@ -14,7 +15,7 @@ pub fn stop_recording(
     recording_paused: &std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> AppResult<PathBuf> {
     println!("[SCK] === STOP RECORDING START ===");
-    let stop_start = std::time::Instant::now();
+    let stop_start = Instant::now();
 
     let mut state = state
         .lock()
@@ -43,7 +44,7 @@ pub fn stop_recording(
     println!("[SCK] ✓ Capture stopped");
 
     // STEP 2: Wait briefly for callbacks to finish
-    thread::sleep(std::time::Duration::from_millis(100));
+    thread::sleep(Duration::from_millis(100));
 
     // STEP 3: Close writers
     println!("[SCK] Closing writers...");
@@ -61,7 +62,7 @@ pub fn stop_recording(
 
     // STEP 4: Wait for video FFmpeg to finish (should finish quickly since stdin is closed)
     println!("[SCK] Waiting for video FFmpeg to finish...");
-    let wait_start = std::time::Instant::now();
+    let wait_start = Instant::now();
     loop {
         match state.ffmpeg_process.try_wait() {
             Ok(Some(status)) => {
@@ -73,13 +74,13 @@ pub fn stop_recording(
                 break;
             }
             Ok(None) => {
-                if wait_start.elapsed() > std::time::Duration::from_secs(5) {
+                if wait_start.elapsed() > Duration::from_secs(5) {
                     println!("[SCK] ⚠ Video FFmpeg timeout, killing...");
                     let _ = state.ffmpeg_process.kill();
                     let _ = state.ffmpeg_process.wait();
                     break;
                 }
-                thread::sleep(std::time::Duration::from_millis(100));
+                thread::sleep(Duration::from_millis(100));
             }
             Err(_) => {
                 let _ = state.ffmpeg_process.kill();
@@ -97,7 +98,7 @@ pub fn stop_recording(
             .status();
 
         // Wait for mic FFmpeg
-        let mic_wait = std::time::Instant::now();
+        let mic_wait = Instant::now();
         loop {
             match mic_proc.try_wait() {
                 Ok(Some(status)) => {
@@ -105,12 +106,12 @@ pub fn stop_recording(
                     break;
                 }
                 Ok(None) => {
-                    if mic_wait.elapsed() > std::time::Duration::from_secs(3) {
+                    if mic_wait.elapsed() > Duration::from_secs(3) {
                         let _ = mic_proc.kill();
                         let _ = mic_proc.wait();
                         break;
                     }
-                    thread::sleep(std::time::Duration::from_millis(100));
+                    thread::sleep(Duration::from_millis(100));
                 }
                 Err(_) => {
                     let _ = mic_proc.kill();
@@ -166,6 +167,7 @@ pub fn stop_recording(
 
     // STEP 6: Mux video + audio together
     println!("[SCK] Muxing video + audio...");
+    let mux_start = Instant::now();
     let mux_result = mux_final_video(
         &temp_video_path,
         &system_audio_path,
@@ -189,26 +191,27 @@ pub fn stop_recording(
         mic_audio_offset_seconds,
         &state.ffmpeg_path,
     );
+    let mux_elapsed = mux_start.elapsed();
 
-    // Clean up temp files
-    let _ = std::fs::remove_file(&temp_video_path);
-    let _ = std::fs::remove_file(&system_audio_path);
-    if let Some(mic_path) = &mic_audio_path {
-        let _ = std::fs::remove_file(mic_path);
-    }
-
-    println!(
-        "[SCK] === STOP RECORDING COMPLETE in {:?} ===",
-        stop_start.elapsed()
-    );
-
-    // Check result
     if let Err(e) = mux_result {
-        println!("[SCK] ⚠ Mux failed: {}, returning video-only", e);
-        // If mux failed, copy video-only
+        println!("[SCK] ⚠ Mux failed after {:?}: {}", mux_elapsed, e);
+        println!("[SCK] Attempting video-only fallback...");
         if temp_video_path.exists() {
-            let _ = std::fs::copy(&temp_video_path, &output_path);
+            std::fs::copy(&temp_video_path, &output_path).map_err(|copy_err| {
+                AppError::Recording(format!(
+                    "Mux failed ({}) and video-only fallback copy failed ({}). Temp files preserved: video={:?}, system_audio={:?}, mic_audio={:?}",
+                    e, copy_err, temp_video_path, system_audio_path, mic_audio_path
+                ))
+            })?;
+            println!("[SCK] Video-only fallback copied to {:?}", output_path);
+        } else {
+            return Err(AppError::Recording(format!(
+                "Mux failed ({}) and temp video is missing. Temp files preserved: video={:?}, system_audio={:?}, mic_audio={:?}",
+                e, temp_video_path, system_audio_path, mic_audio_path
+            )));
         }
+    } else {
+        println!("[SCK] Mux completed in {:?}", mux_elapsed);
     }
 
     if output_path.exists() {
@@ -219,11 +222,43 @@ pub fn stop_recording(
             "[SCK] ✓ Recording saved: {:?} ({} bytes)",
             output_path, size
         );
+        cleanup_temp_files(
+            &temp_video_path,
+            &system_audio_path,
+            mic_audio_path.as_ref(),
+        );
+        println!(
+            "[SCK] === STOP RECORDING COMPLETE in {:?} ===",
+            stop_start.elapsed()
+        );
         Ok(output_path)
     } else {
         Err(AppError::Recording(format!(
-            "Output file not created: {:?}",
-            output_path
+            "Output file not created: {:?}. Temp files preserved: video={:?}, system_audio={:?}, mic_audio={:?}",
+            output_path, temp_video_path, system_audio_path, mic_audio_path
         )))
+    }
+}
+
+fn cleanup_temp_files(
+    temp_video_path: &PathBuf,
+    system_audio_path: &PathBuf,
+    mic_audio_path: Option<&PathBuf>,
+) {
+    remove_temp_file(temp_video_path, "video");
+    remove_temp_file(system_audio_path, "system audio");
+    if let Some(path) = mic_audio_path {
+        remove_temp_file(path, "mic audio");
+    }
+}
+
+fn remove_temp_file(path: &PathBuf, label: &str) {
+    match std::fs::remove_file(path) {
+        Ok(_) => println!("[SCK] Removed temp {} file: {:?}", label, path),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => eprintln!(
+            "[SCK] Failed to remove temp {} file {:?}: {}",
+            label, path, err
+        ),
     }
 }

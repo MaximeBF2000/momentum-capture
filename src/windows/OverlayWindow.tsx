@@ -77,7 +77,7 @@ export function OverlayWindow() {
   }, [setRecordingState, setElapsedTime, reset, setError, setSettings])
 
   return (
-    <div className="w-full h-full flex items-center justify-center bg-transparent p-6">
+    <div className="w-full h-full flex items-center justify-center bg-transparent">
       <ControlBar />
     </div>
   )

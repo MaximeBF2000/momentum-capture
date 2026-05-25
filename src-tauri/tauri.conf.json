@@ -16,15 +16,17 @@
       {
         "label": "overlay",
         "title": "Momentum",
-        "width": 520,
-        "height": 88,
+        "width": 88,
+        "height": 330,
         "decorations": false,
         "alwaysOnTop": true,
         "transparent": true,
         "resizable": false,
         "skipTaskbar": true,
         "visible": true,
-        "visibleOnAllWorkspaces": true
+        "visibleOnAllWorkspaces": true,
+        "focusable": false,
+        "focus": false
       },
       {
         "label": "camera-overlay",
@@ -37,7 +39,9 @@
         "resizable": false,
         "skipTaskbar": true,
         "visible": false,
-        "visibleOnAllWorkspaces": true
+        "visibleOnAllWorkspaces": true,
+        "focusable": false,
+        "focus": false
       },
       {
         "label": "settings",
