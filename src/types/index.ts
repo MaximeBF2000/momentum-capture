@@ -35,7 +35,42 @@ export interface AppSettings {
   cameraDeviceId?: string
   hideWebcamOnImmersiveMode: boolean
   immersiveShortcut: string
+  saveRecordingsLocally: boolean
   saveLocation?: string // Defaults to Downloads
+  googleDrive: GoogleDriveSettings
+}
+
+export interface GoogleDriveSettings {
+  enabled: boolean
+  clientId?: string
+  folderId?: string
+  folderName?: string
+  accountEmail?: string
+  accessToken?: string
+  refreshToken?: string
+  tokenExpiresAtMs?: number
+}
+
+export interface DriveFolder {
+  id: string
+  name: string
+  modifiedTime?: string
+  webViewLink?: string
+}
+
+export interface DriveVideo {
+  id: string
+  name: string
+  createdTime?: string
+  modifiedTime?: string
+  webViewLink?: string
+  thumbnailLink?: string
+}
+
+export interface DriveUploadResult {
+  id: string
+  name: string
+  webViewLink: string
 }
 
 export interface CameraFrame {

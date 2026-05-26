@@ -6,8 +6,12 @@ pub enum AppError {
     Camera(String),
     #[error("Settings error: {0}")]
     Settings(String),
+    #[error("Google Drive error: {0}")]
+    GoogleDrive(String),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("HTTP error: {0}")]
+    Http(#[from] reqwest::Error),
     #[error("UTF-8 error: {0}")]
     Utf8(#[from] std::string::FromUtf8Error),
     #[error("Tauri error: {0}")]

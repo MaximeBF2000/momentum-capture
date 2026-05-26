@@ -195,6 +195,7 @@ impl CameraSyncHandle {
                 in_count, frame.pts_ns, buffered_len
             );
         }
+
         if !self.sync_enabled.load(Ordering::Relaxed) {
             self.emit(frame.clone());
             *self.last_emitted_frame.lock().unwrap() = Some(frame);

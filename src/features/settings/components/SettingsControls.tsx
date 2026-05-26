@@ -15,7 +15,7 @@ export function SettingsSection({
         {title}
       </h2>
       <div
-        className="overflow-hidden rounded-[16px] shadow-inner shadow-white/[0.035]"
+        className="rounded-[16px] shadow-inner shadow-white/[0.035]"
         style={{
           background: 'rgba(255,255,255,0.045)',
           border: '1px solid rgba(255,255,255,0.12)'
@@ -93,6 +93,120 @@ export function SettingsDivider() {
       className="mx-5 h-px"
       style={{ background: 'rgba(255,255,255,0.10)' }}
     />
+  )
+}
+
+export function SettingsToggle({
+  icon,
+  title,
+  description,
+  checked,
+  onChange
+}: {
+  icon: ReactNode
+  title: string
+  description?: string
+  checked: boolean
+  onChange: (checked: boolean) => void
+}) {
+  return (
+    <label
+      className="grid min-h-[78px] cursor-pointer grid-cols-[minmax(0,1fr)_auto] items-center gap-5 px-5 py-5"
+      data-tauri-drag-region="false"
+    >
+      <span className="flex min-w-0 items-center gap-5">
+        <span
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-white"
+          style={{ background: 'rgba(255,255,255,0.10)' }}
+        >
+          {icon}
+        </span>
+        <span className="min-w-0">
+          <span className="block text-[16px] font-semibold leading-none tracking-tight text-white">
+            {title}
+          </span>
+          {description && (
+            <span className="mt-2 block truncate text-[14px] leading-5 text-neutral-400">
+              {description}
+            </span>
+          )}
+        </span>
+      </span>
+      <span
+        className={`relative h-6 w-11 rounded-full transition-colors ${
+          checked ? 'bg-blue-600' : 'bg-neutral-700'
+        }`}
+      >
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={event => onChange(event.currentTarget.checked)}
+          className="absolute inset-0 cursor-pointer opacity-0"
+        />
+        <span
+          className={`absolute top-1 h-4 w-4 rounded-full bg-white transition-transform ${
+            checked ? 'translate-x-6' : 'translate-x-1'
+          }`}
+        />
+      </span>
+    </label>
+  )
+}
+
+export function SettingsInput({
+  label,
+  value,
+  placeholder,
+  onChange
+}: {
+  label: string
+  value: string
+  placeholder?: string
+  onChange: (value: string) => void
+}) {
+  return (
+    <input
+      aria-label={label}
+      value={value}
+      placeholder={placeholder}
+      onChange={event => onChange(event.currentTarget.value)}
+      className="h-[38px] w-full rounded-lg px-4 text-[14px] font-medium text-white outline-none transition-colors placeholder:text-neutral-600 focus:border-blue-500"
+      style={{
+        background: 'rgba(18,18,18,0.56)',
+        border: '1px solid rgba(255,255,255,0.15)'
+      }}
+      data-tauri-drag-region="false"
+    />
+  )
+}
+
+export function SettingsButton({
+  children,
+  icon,
+  disabled,
+  ariaLabel,
+  onClick
+}: {
+  children?: ReactNode
+  icon?: ReactNode
+  disabled?: boolean
+  ariaLabel?: string
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={ariaLabel}
+      disabled={disabled}
+      onClick={onClick}
+      className={`flex h-[38px] items-center justify-center gap-2 rounded-lg bg-white/12 px-3 text-[14px] font-medium text-neutral-100 transition-colors hover:bg-white/18 disabled:cursor-not-allowed disabled:text-neutral-500 ${
+        children ? 'min-w-[118px]' : 'w-[38px]'
+      }`}
+      data-tauri-drag-region="false"
+    >
+      {icon}
+      {children && <span className="truncate">{children}</span>}
+    </button>
   )
 }
 
