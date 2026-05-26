@@ -12,7 +12,6 @@ import {
 } from 'lucide-react'
 import { useRecordingStore } from '../../state/recordingStore'
 import { TimerDisplay } from './TimerDisplay'
-import { Countdown } from './Countdown'
 import {
   pauseRecording,
   resumeRecording,
@@ -43,66 +42,33 @@ export function ControlBar() {
   const handleStart = async () => {
     try {
       startCountdown()
-
-      // Countdown logic - use ref to store interval
-      let countdownInterval: ReturnType<typeof setInterval> | null = null
-
-      const tickAndCheck = async () => {
-        const state = useRecordingStore.getState()
-        const currentCountdown = state.countdownSecondsRemaining
-
-        console.log('Countdown tick, remaining:', currentCountdown)
-
-        // If countdown is done, start recording
-        if (currentCountdown === null || currentCountdown <= 0) {
-          if (countdownInterval) {
-            clearInterval(countdownInterval)
-            countdownInterval = null
-          }
-
-          // Start recording - set state optimistically to avoid UI delay
-          try {
-            console.log(
-              'Countdown finished, starting recording with options:',
-              {
+      setTimeout(async () => {
+        useRecordingStore.getState().tickCountdown() // 3 -> 2
+        setTimeout(async () => {
+          useRecordingStore.getState().tickCountdown() // 2 -> 1
+          setTimeout(async () => {
+            useRecordingStore.getState().tickCountdown() // 1 -> 0 and clear
+            try {
+              console.log('Countdown finished, starting recording with options:', {
                 mic: settings.micEnabled,
                 camera: settings.cameraEnabled
-              }
-            )
-            // Set state to recording immediately to enable buttons and start timer
-            setRecordingState('recording')
-            await startRecording({
-              includeMicrophone: settings.micEnabled,
-              includeCamera: settings.cameraEnabled,
-              microphoneDeviceId: settings.microphoneDeviceId,
-              cameraDeviceId: settings.cameraDeviceId
-            })
-            console.log('Recording command sent successfully')
-          } catch (err: any) {
-            console.error('Failed to start recording:', err)
-            setError(err.message || 'Failed to start recording')
-            useRecordingStore.getState().reset()
-          }
-          return
-        }
-
-        // Continue countdown
-        useRecordingStore.getState().tickCountdown()
-      }
-
-      // Start countdown immediately (shows 3)
-      // Don't tick immediately - let the UI show 3 first
-      // Then tick every second starting after 1 second
-      countdownInterval = setInterval(() => {
-        tickAndCheck()
+              })
+              setRecordingState('recording')
+              await startRecording({
+                includeMicrophone: settings.micEnabled,
+                includeCamera: settings.cameraEnabled,
+                microphoneDeviceId: settings.microphoneDeviceId,
+                cameraDeviceId: settings.cameraDeviceId
+              })
+              console.log('Recording command sent successfully')
+            } catch (err: any) {
+              console.error('Failed to start recording:', err)
+              setError(err.message || 'Failed to start recording')
+              useRecordingStore.getState().reset()
+            }
+          }, 1000)
+        }, 1000)
       }, 1000)
-
-      // Store interval in a way that can be cleaned up
-      return () => {
-        if (countdownInterval) {
-          clearInterval(countdownInterval)
-        }
-      }
     } catch (err: any) {
       console.error('Error in handleStart:', err)
       setError(err.message || 'Failed to start recording')
@@ -191,6 +157,9 @@ export function ControlBar() {
   const isCountdown = recordingState === 'countdown'
   const isStopping = recordingState === 'stopping'
   const isBusy = isCountdown || isStopping
+  const countdownSecondsRemaining = useRecordingStore(
+    state => state.countdownSecondsRemaining
+  )
   const buttonBase =
     'cursor-pointer w-8 h-8 rounded flex items-center justify-center transition-colors disabled:opacity-45 disabled:cursor-not-allowed'
   const inactiveButton = 'bg-neutral-800/95 hover:bg-neutral-700/95'
@@ -205,18 +174,26 @@ export function ControlBar() {
         className="flex h-80 w-14 flex-col items-center justify-center rounded-2xl border border-neutral-700/70 bg-neutral-950 backdrop-blur-md select-none gap-4"
         data-tauri-drag-region="true"
       >
-        <div className="flex flex-col items-center gap-2 pointer-events-none select-none">
-          <div
-            className={`h-2.5 w-2.5 rounded-full ${
-              isRecording ? 'bg-red-500' : 'bg-neutral-600'
-            }`}
-            aria-label={isRecording ? 'Recording' : 'Not recording'}
-          />
-          <TimerDisplay
-            compact
-            className="font-mono text-[11px] leading-none text-neutral-300"
-          />
-        </div>
+        {isCountdown && countdownSecondsRemaining !== null ? (
+          <div className="flex h-10 w-full items-center justify-center pointer-events-none select-none">
+            <span className="font-mono text-2xl font-bold leading-none text-white">
+              {countdownSecondsRemaining}
+            </span>
+          </div>
+        ) : (
+          <div className="flex flex-col items-center gap-2 pointer-events-none select-none">
+            <div
+              className={`h-2.5 w-2.5 rounded-full ${
+                isRecording ? 'bg-red-500' : 'bg-neutral-600'
+              }`}
+              aria-label={isRecording ? 'Recording' : 'Not recording'}
+            />
+            <TimerDisplay
+              compact
+              className="font-mono text-[11px] leading-none text-neutral-300"
+            />
+          </div>
+        )}
 
         <div className="flex flex-col items-center gap-2">
           <button
@@ -325,7 +302,6 @@ export function ControlBar() {
           </button>
         </div>
       </div>
-      {isCountdown && <Countdown />}
     </div>
   )
 }
