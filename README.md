@@ -1,10 +1,5 @@
 # Momentum
 
-## Setup Guide
-
-For full local setup (macOS + Google Drive integration), follow:
-- [docs/users/SETUP.md](/Users/maximebf/Desktop/Desk/programming/projects/desktop_apps/momentum_capture/docs/users/SETUP.md)
-
 ![Momentum screenshot](/public/screenshot.png)
 
 **Momentum** is a native macOS screen recording application focused on speed, simplicity, and local-first recording.
@@ -32,6 +27,14 @@ The app captures:
 All recordings are saved **locally** as MP4 files.
 
 There is no cloud processing, no upload step, and no background service.
+
+---
+
+## Setup Guide
+
+For full local setup (macOS + Google Drive integration), follow:
+
+- [docs/users/SETUP.md](/Users/maximebf/Desktop/Desk/programming/projects/desktop_apps/momentum_capture/docs/users/SETUP.md)
 
 ---
 
