@@ -1,5 +1,5 @@
 import { listen } from '@tauri-apps/api/event'
-import type { AppSettings, CameraFrame } from '../types'
+import type { AppSettings, CameraFrame, DriveUploadResult } from '../types'
 
 export const RECORDING_EVENTS = {
   STARTED: 'recording-started',
@@ -10,7 +10,10 @@ export const RECORDING_EVENTS = {
   ERROR: 'recording-error',
   ELAPSED: 'recording-elapsed',
   CAMERA_FRAME: 'camera-frame',
-  CAMERA_ERROR: 'camera-error'
+  CAMERA_ERROR: 'camera-error',
+  DRIVE_UPLOAD_PENDING: 'drive-upload-pending',
+  DRIVE_UPLOAD_COMPLETE: 'drive-upload-complete',
+  DRIVE_UPLOAD_ERROR: 'drive-upload-error'
 } as const
 
 export const SETTINGS_EVENTS = {
@@ -45,6 +48,10 @@ export interface RecordingErrorPayload {
   message: string
 }
 
+export interface DriveUploadPendingPayload {
+  name: string
+}
+
 export interface RecordingElapsedPayload {
   elapsedMs: number
 }
@@ -59,6 +66,9 @@ export const subscribeToRecordingEvents = (callbacks: {
   onElapsed?: (payload: RecordingElapsedPayload) => void
   onCameraFrame?: (frame: CameraFrame) => void
   onCameraError?: (payload: RecordingErrorPayload) => void
+  onDriveUploadPending?: (payload: DriveUploadPendingPayload) => void
+  onDriveUploadComplete?: (payload: DriveUploadResult) => void
+  onDriveUploadError?: (payload: RecordingErrorPayload) => void
 }) => {
   const unsubscribers: Array<() => void> = []
 
@@ -114,6 +124,33 @@ export const subscribeToRecordingEvents = (callbacks: {
     listen<RecordingErrorPayload>(RECORDING_EVENTS.CAMERA_ERROR, event => {
       callbacks.onCameraError?.(event.payload)
     }).then(unsub => unsubscribers.push(unsub))
+  }
+
+  if (callbacks.onDriveUploadPending) {
+    listen<DriveUploadPendingPayload>(
+      RECORDING_EVENTS.DRIVE_UPLOAD_PENDING,
+      event => {
+        callbacks.onDriveUploadPending?.(event.payload)
+      }
+    ).then(unsub => unsubscribers.push(unsub))
+  }
+
+  if (callbacks.onDriveUploadComplete) {
+    listen<DriveUploadResult>(
+      RECORDING_EVENTS.DRIVE_UPLOAD_COMPLETE,
+      event => {
+        callbacks.onDriveUploadComplete?.(event.payload)
+      }
+    ).then(unsub => unsubscribers.push(unsub))
+  }
+
+  if (callbacks.onDriveUploadError) {
+    listen<RecordingErrorPayload>(
+      RECORDING_EVENTS.DRIVE_UPLOAD_ERROR,
+      event => {
+        callbacks.onDriveUploadError?.(event.payload)
+      }
+    ).then(unsub => unsubscribers.push(unsub))
   }
 
   return () => {

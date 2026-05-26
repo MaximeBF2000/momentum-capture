@@ -9,7 +9,11 @@ describe('settingsStore', () => {
         micEnabled: false,
         cameraEnabled: false,
         hideWebcamOnImmersiveMode: true,
-        immersiveShortcut: 'Option+I'
+        immersiveShortcut: 'Option+I',
+        saveRecordingsLocally: true,
+        googleDrive: {
+          enabled: false
+        }
       }
     })
   })
@@ -30,7 +34,11 @@ describe('settingsStore', () => {
       micEnabled: true,
       cameraEnabled: true,
       hideWebcamOnImmersiveMode: false,
-      immersiveShortcut: 'Command+Shift+I'
+      immersiveShortcut: 'Command+Shift+I',
+      saveRecordingsLocally: true,
+      googleDrive: {
+        enabled: false
+      }
     })
 
     const updated = useSettingsStore.getState().settings

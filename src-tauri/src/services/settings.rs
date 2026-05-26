@@ -65,7 +65,9 @@ mod tests {
             camera_device_id: Some("camera-id".to_string()),
             hide_webcam_on_immersive_mode: false,
             immersive_shortcut: "Command+Shift+I".to_string(),
+            save_recordings_locally: true,
             save_location: Some("/tmp".to_string()),
+            google_drive: Default::default(),
         };
 
         store.save(&settings).expect("save");
@@ -76,6 +78,7 @@ mod tests {
         assert_eq!(loaded.camera_device_id.as_deref(), Some("camera-id"));
         assert_eq!(loaded.hide_webcam_on_immersive_mode, false);
         assert_eq!(loaded.immersive_shortcut, "Command+Shift+I");
+        assert_eq!(loaded.save_recordings_locally, true);
         assert_eq!(loaded.save_location.as_deref(), Some("/tmp"));
     }
 

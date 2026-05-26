@@ -11,6 +11,7 @@ pub mod platform;
 pub mod immersive;
 pub mod hotkey;
 pub mod time;
+pub mod google_drive;
 
 pub use recording::Recorder;
 pub use camera::CameraPreview;

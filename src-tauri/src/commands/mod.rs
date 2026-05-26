@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -8,6 +9,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::error::{AppError, AppResult};
 use crate::models::{AppSettings, CaptureDevices, RecordingOptions};
 use crate::services::camera::CameraPreview;
+use crate::services::google_drive::{self, DriveFolder, DriveUploadResult, DriveVideo};
 use crate::services::immersive::ImmersiveMode;
 use crate::services::platform::device_resolver;
 use crate::services::recording::{
@@ -16,10 +18,7 @@ use crate::services::recording::{
 use crate::services::settings::SettingsStore;
 
 #[tauri::command]
-pub async fn start_recording(
-    options: RecordingOptions,
-    app: AppHandle,
-) -> AppResult<()> {
+pub async fn start_recording(options: RecordingOptions, app: AppHandle) -> AppResult<()> {
     let app_handle = app.clone();
     let options_clone = options.clone();
 
@@ -38,26 +37,25 @@ pub async fn start_recording(
                     let settings_store = app_handle.state::<SettingsStore>();
                     let settings = settings_store.load().unwrap_or_default();
                     let immersive = is_immersive_enabled(&immersive_state);
-                    let hide_for_immersive =
-                        immersive && settings.hide_webcam_on_immersive_mode;
+                    let hide_for_immersive = immersive && settings.hide_webcam_on_immersive_mode;
                     if let Err(err) = apply_camera_overlay_visibility(
                         &app_handle,
                         &camera_preview,
                         true,
                         hide_for_immersive,
-                    )
-                    {
-                        let _ = app_handle.emit(
-                            "recording-error",
-                            json!({ "message": err.to_string() }),
-                        );
+                    ) {
+                        let _ = app_handle
+                            .emit("recording-error", json!({ "message": err.to_string() }));
                     }
                 }
             }
             Err(err) => {
-                let _ = app_handle.emit("recording-error", json!({
-                    "message": err.to_string()
-                }));
+                let _ = app_handle.emit(
+                    "recording-error",
+                    json!({
+                        "message": err.to_string()
+                    }),
+                );
             }
         }
     });
@@ -66,29 +64,21 @@ pub async fn start_recording(
 }
 
 #[tauri::command]
-pub async fn pause_recording(
-    recorder: State<'_, Recorder>,
-    app: AppHandle,
-) -> AppResult<()> {
+pub async fn pause_recording(recorder: State<'_, Recorder>, app: AppHandle) -> AppResult<()> {
     let info: RecordingPausedInfo = recorder.pause()?;
     app.emit("recording-paused", info)?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn resume_recording(
-    recorder: State<'_, Recorder>,
-    app: AppHandle,
-) -> AppResult<()> {
+pub async fn resume_recording(recorder: State<'_, Recorder>, app: AppHandle) -> AppResult<()> {
     let info: RecordingResumedInfo = recorder.resume()?;
     app.emit("recording-resumed", info)?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn stop_recording(
-    app: AppHandle,
-) -> AppResult<()> {
+pub async fn stop_recording(app: AppHandle) -> AppResult<()> {
     let app_handle = app.clone();
 
     tauri::async_runtime::spawn(async move {
@@ -108,33 +98,38 @@ pub async fn stop_recording(
                 let settings_store = app_handle.state::<SettingsStore>();
                 if let Ok(settings) = settings_store.load() {
                     let immersive = is_immersive_enabled(&immersive_state);
-                    let hide_for_immersive =
-                        immersive && settings.hide_webcam_on_immersive_mode;
+                    let hide_for_immersive = immersive && settings.hide_webcam_on_immersive_mode;
                     if let Err(err) = apply_camera_overlay_visibility(
                         &app_handle,
                         &camera_preview,
                         settings.camera_enabled,
                         hide_for_immersive,
                     ) {
-                        let _ = app_handle.emit(
-                            "recording-error",
-                            json!({ "message": err.to_string() }),
-                        );
+                        let _ = app_handle
+                            .emit("recording-error", json!({ "message": err.to_string() }));
                         return;
                     }
                 }
 
-                if let Err(err) = save_recording_file(&app_handle, stop_result.output_path) {
-                    let _ = app_handle.emit("recording-error", json!({
-                        "message": err.to_string()
-                    }));
+                if let Err(err) =
+                    finalize_recording_file(&app_handle, stop_result.output_path).await
+                {
+                    let _ = app_handle.emit(
+                        "recording-error",
+                        json!({
+                            "message": err.to_string()
+                        }),
+                    );
                     return;
                 }
             }
             Err(err) => {
-                let _ = app_handle.emit("recording-error", json!({
-                    "message": err.to_string()
-                }));
+                let _ = app_handle.emit(
+                    "recording-error",
+                    json!({
+                        "message": err.to_string()
+                    }),
+                );
             }
         }
     });
@@ -183,6 +178,35 @@ pub async fn update_settings(
 }
 
 #[tauri::command]
+pub async fn authorize_google_drive(
+    settings_store: State<'_, SettingsStore>,
+    app: AppHandle,
+) -> AppResult<crate::models::GoogleDriveSettings> {
+    let drive = google_drive::authorize(&settings_store).await?;
+    app.emit("settings-updated", settings_store.load()?)?;
+    Ok(drive)
+}
+
+#[tauri::command]
+pub async fn list_google_drive_folders(
+    settings_store: State<'_, SettingsStore>,
+) -> AppResult<Vec<DriveFolder>> {
+    google_drive::list_folders(&settings_store).await
+}
+
+#[tauri::command]
+pub async fn list_google_drive_videos(
+    settings_store: State<'_, SettingsStore>,
+) -> AppResult<Vec<DriveVideo>> {
+    google_drive::list_videos(&settings_store).await
+}
+
+#[tauri::command]
+pub async fn show_native_notification(title: String, message: String) -> AppResult<()> {
+    show_platform_notification(&title, &message)
+}
+
+#[tauri::command]
 pub async fn toggle_settings_window(app: AppHandle) -> AppResult<()> {
     let window = app
         .get_webview_window("settings")
@@ -221,19 +245,13 @@ pub async fn toggle_microphone_during_recording(enabled: bool) -> AppResult<()> 
 }
 
 #[tauri::command]
-pub async fn set_mic_muted(
-    muted: bool,
-    recorder: State<'_, Recorder>,
-) -> AppResult<()> {
+pub async fn set_mic_muted(muted: bool, recorder: State<'_, Recorder>) -> AppResult<()> {
     recorder.set_mic_muted(muted);
     Ok(())
 }
 
 #[tauri::command]
-pub async fn set_system_audio_muted(
-    muted: bool,
-    recorder: State<'_, Recorder>,
-) -> AppResult<()> {
+pub async fn set_system_audio_muted(muted: bool, recorder: State<'_, Recorder>) -> AppResult<()> {
     recorder.set_system_audio_muted(muted);
     Ok(())
 }
@@ -281,10 +299,7 @@ pub async fn update_immersive_shortcut(
     current.immersive_shortcut = trimmed.to_string();
     settings_store.save(&current)?;
     crate::register_immersive_shortcut_handler(&app, trimmed)?;
-    app.emit(
-        "immersive-shortcut-updated",
-        json!({ "shortcut": trimmed }),
-    )?;
+    app.emit("immersive-shortcut-updated", json!({ "shortcut": trimmed }))?;
     app.emit("settings-updated", current)?;
     Ok(())
 }
@@ -364,14 +379,11 @@ fn apply_immersive_state(
         hide_for_immersive,
     )?;
 
-    app.emit(
-        "immersive-mode-changed",
-        json!({ "enabled": enabled }),
-    )?;
+    app.emit("immersive-mode-changed", json!({ "enabled": enabled }))?;
     Ok(())
 }
 
-fn save_recording_file(app: &AppHandle, temp_path: PathBuf) -> AppResult<()> {
+async fn finalize_recording_file(app: &AppHandle, temp_path: PathBuf) -> AppResult<()> {
     let save_start = Instant::now();
     let settings_store = app.state::<SettingsStore>();
     let settings = settings_store.load().unwrap_or_default();
@@ -406,13 +418,51 @@ fn save_recording_file(app: &AppHandle, temp_path: PathBuf) -> AppResult<()> {
         json!({ "path": final_path.to_string_lossy() }),
     )?;
 
+    if settings.google_drive.enabled {
+        app.emit(
+            "drive-upload-pending",
+            json!({ "name": final_path.file_name().and_then(|name| name.to_str()).unwrap_or("Recording") }),
+        )?;
+
+        let upload_result = upload_recording_to_drive(app, &final_path).await;
+        if !settings.save_recordings_locally {
+            let _ = std::fs::remove_file(&final_path);
+        }
+
+        match upload_result {
+            Ok(result) => {
+                app.emit("drive-upload-complete", result)?;
+            }
+            Err(err) => {
+                app.emit("drive-upload-error", json!({ "message": err.to_string() }))?;
+            }
+        }
+    }
+
     Ok(())
+}
+
+async fn upload_recording_to_drive(
+    app: &AppHandle,
+    final_path: &Path,
+) -> AppResult<DriveUploadResult> {
+    let settings_store = app.state::<SettingsStore>();
+    google_drive::upload_video(&settings_store, final_path).await
 }
 
 fn build_staging_output_path(app: &AppHandle) -> AppResult<PathBuf> {
     let settings_store = app.state::<SettingsStore>();
     let settings = settings_store.load().unwrap_or_default();
-    let target_dir = resolve_output_dir(&settings)?;
+    if !settings.save_recordings_locally && !settings.google_drive.enabled {
+        return Err(AppError::Recording(
+            "Enable local saving or Google Drive before recording.".into(),
+        ));
+    }
+    let target_dir = if settings.save_recordings_locally {
+        resolve_output_dir(&settings)?
+    } else {
+        std::env::temp_dir().join("momentum")
+    };
     std::fs::create_dir_all(&target_dir)?;
     let path = target_dir.join(format!(
         ".momentum-recording-{}-{}.inprogress.mp4",
@@ -467,9 +517,7 @@ fn same_path(left: &Path, right: &Path) -> bool {
 fn is_momentum_staging_file(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
-        .map(|name| {
-            name.starts_with(".momentum-recording-") && name.ends_with(".inprogress.mp4")
-        })
+        .map(|name| name.starts_with(".momentum-recording-") && name.ends_with(".inprogress.mp4"))
         .unwrap_or(false)
 }
 
@@ -498,9 +546,8 @@ fn resolve_output_dir(settings: &AppSettings) -> AppResult<PathBuf> {
         return Ok(PathBuf::from(path));
     }
 
-    dirs::download_dir().ok_or_else(|| {
-        AppError::Recording("Failed to resolve downloads directory".to_string())
-    })
+    dirs::download_dir()
+        .ok_or_else(|| AppError::Recording("Failed to resolve downloads directory".to_string()))
 }
 
 fn current_time_seconds() -> u64 {
@@ -515,4 +562,31 @@ fn current_time_millis() -> u128 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_else(|_| Duration::from_secs(0))
         .as_millis()
+}
+
+fn show_platform_notification(title: &str, message: &str) -> AppResult<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let status = Command::new("osascript")
+            .args([
+                "-e",
+                "on run argv\n  display notification (item 2 of argv) with title (item 1 of argv)\nend run",
+                title,
+                message,
+            ])
+            .status()?;
+
+        if !status.success() {
+            return Err(AppError::Settings(
+                "Failed to show macOS notification".into(),
+            ));
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (title, message);
+    }
+
+    Ok(())
 }

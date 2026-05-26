@@ -55,8 +55,8 @@
         "skipTaskbar": true,
         "visible": false,
         "visibleOnAllWorkspaces": true,
-        "focusable": false,
-        "focus": false
+        "focusable": true,
+        "focus": true
       }
     ],
     "security": {

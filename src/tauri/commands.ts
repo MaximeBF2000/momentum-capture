@@ -1,5 +1,12 @@
 import { invoke } from '@tauri-apps/api/core'
-import type { RecordingOptions, AppSettings, CaptureDevices } from '../types'
+import type {
+  RecordingOptions,
+  AppSettings,
+  CaptureDevices,
+  DriveFolder,
+  DriveVideo,
+  GoogleDriveSettings
+} from '../types'
 
 export const startRecording = async (
   options: RecordingOptions
@@ -33,6 +40,26 @@ export const listCaptureDevices = async (): Promise<CaptureDevices> => {
 
 export const updateSettings = async (settings: AppSettings): Promise<void> => {
   await invoke('update_settings', { settings })
+}
+
+export const authorizeGoogleDrive =
+  async (): Promise<GoogleDriveSettings> => {
+    return await invoke('authorize_google_drive')
+  }
+
+export const listGoogleDriveFolders = async (): Promise<DriveFolder[]> => {
+  return await invoke('list_google_drive_folders')
+}
+
+export const listGoogleDriveVideos = async (): Promise<DriveVideo[]> => {
+  return await invoke('list_google_drive_videos')
+}
+
+export const showNativeNotification = async (
+  title: string,
+  message: string
+): Promise<void> => {
+  await invoke('show_native_notification', { title, message })
 }
 
 export const toggleSettingsWindow = async (): Promise<void> => {

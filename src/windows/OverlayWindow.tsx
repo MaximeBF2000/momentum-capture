@@ -4,7 +4,7 @@ import { ControlBar } from '../components/recording/ControlBar'
 import { useRecordingStore } from '../state/recordingStore'
 import { useSettingsStore } from '../state/settingsStore'
 import { subscribeToRecordingEvents } from '../tauri/events'
-import { getSettings } from '../tauri/commands'
+import { getSettings, showNativeNotification } from '../tauri/commands'
 import '../App.css'
 
 export function OverlayWindow() {
@@ -55,6 +55,21 @@ export function OverlayWindow() {
       },
       onElapsed: payload => {
         setElapsedTime(payload.elapsedMs)
+      },
+      onDriveUploadPending: () => {
+        notify('Momentum', 'Your video will soon be ready to be shared')
+      },
+      onDriveUploadComplete: async payload => {
+        try {
+          await navigator.clipboard.writeText(payload.webViewLink)
+          notify('Momentum', 'Your video is ready and has been pasted to your clipboard')
+        } catch (err) {
+          console.error('Failed to copy Drive link:', err)
+          notify('Momentum', 'Your video is ready, but could not be copied')
+        }
+      },
+      onDriveUploadError: payload => {
+        notify('Momentum', payload.message)
       }
     })
 
@@ -81,4 +96,10 @@ export function OverlayWindow() {
       <ControlBar />
     </div>
   )
+}
+
+function notify(title: string, message: string) {
+  showNativeNotification(title, message).catch(err => {
+    console.error('Failed to show native notification:', err)
+  })
 }

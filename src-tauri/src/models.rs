@@ -8,6 +8,10 @@ fn default_hide_webcam_on_immersive_mode() -> bool {
     true
 }
 
+fn default_save_recordings_locally() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordingOptions {
@@ -39,6 +43,27 @@ pub struct CaptureDevices {
     pub selected_camera_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GoogleDriveSettings {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub client_id: Option<String>,
+    #[serde(default)]
+    pub folder_id: Option<String>,
+    #[serde(default)]
+    pub folder_name: Option<String>,
+    #[serde(default)]
+    pub account_email: Option<String>,
+    #[serde(default)]
+    pub access_token: Option<String>,
+    #[serde(default)]
+    pub refresh_token: Option<String>,
+    #[serde(default)]
+    pub token_expires_at_ms: Option<i64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
@@ -52,7 +77,11 @@ pub struct AppSettings {
     pub hide_webcam_on_immersive_mode: bool,
     #[serde(default = "default_immersive_shortcut")]
     pub immersive_shortcut: String,
+    #[serde(default = "default_save_recordings_locally")]
+    pub save_recordings_locally: bool,
     pub save_location: Option<String>,
+    #[serde(default)]
+    pub google_drive: GoogleDriveSettings,
 }
 
 impl Default for AppSettings {
@@ -64,7 +93,9 @@ impl Default for AppSettings {
             camera_device_id: None,
             hide_webcam_on_immersive_mode: default_hide_webcam_on_immersive_mode(),
             immersive_shortcut: default_immersive_shortcut(),
+            save_recordings_locally: default_save_recordings_locally(),
             save_location: None,
+            google_drive: GoogleDriveSettings::default(),
         }
     }
 }
