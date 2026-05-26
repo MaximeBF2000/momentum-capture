@@ -1,137 +1,152 @@
 # Architecture
 
-Momentum is a single Tauri application with multiple webview windows and a Rust backend that owns all native recording work.
+Momentum is a multi-window desktop app with a React UI layer and a Rust-native media backend.
 
-## Runtime Components
+## High-Level Components
 
 ```mermaid
 flowchart TB
-  subgraph frontend["React frontend"]
-    app["App.tsx routes by Tauri window label"]
+  subgraph FE["Frontend (React)"]
+    app["App.tsx\nwindow router"]
     overlay["OverlayWindow + ControlBar"]
-    cameraOverlay["CameraOverlayWindow + CameraFrame"]
     settings["SettingsWindow"]
-    stores["Zustand stores"]
-    tauriApi["src/tauri command/event wrappers"]
+    camWin["CameraOverlayWindow"]
+    recStore["recordingStore"]
+    setStore["settingsStore"]
+    tsApi["tauri/commands + tauri/events"]
   end
 
-  subgraph tauri["Tauri Rust backend"]
-    bootstrap["lib.rs setup"]
-    commands["commands/mod.rs"]
-    recorder["Recorder"]
-    camera["CameraPreview + CameraSyncHandle"]
-    settingsStore["SettingsStore"]
-    immersive["ImmersiveMode"]
-    hotkey["Carbon global hotkey"]
+  subgraph BE["Backend (Tauri Rust)"]
+    setup["lib.rs setup"]
+    cmd["commands/mod.rs"]
+    rec["Recorder"]
+    cam["CameraPreview"]
+    imm["ImmersiveMode"]
+    cfg["SettingsStore"]
+    drive["google_drive service"]
   end
 
-  subgraph platform["macOS media layer"]
-    sck["ScreenCaptureKitRecorder"]
-    sckStream["SCStream callbacks"]
-    ffmpegVideo["FFmpeg video encoder"]
-    ffmpegMic["FFmpeg mic capture"]
-    ffmpegCam["FFmpeg camera preview"]
-    mux["FFmpeg mux"]
-    swift["Swift AVFoundation resolver"]
+  subgraph Media["Media Layer"]
+    sck["ScreenCaptureKit stream"]
+    ffv["FFmpeg video encode"]
+    ffm["FFmpeg mic capture"]
+    ffc["FFmpeg camera preview"]
+    mux["Final mux"]
   end
 
   app --> overlay
-  app --> cameraOverlay
   app --> settings
-  overlay --> stores
-  settings --> stores
-  stores --> tauriApi
-  tauriApi --> commands
-  bootstrap --> commands
-  bootstrap --> recorder
-  bootstrap --> camera
-  bootstrap --> settingsStore
-  bootstrap --> immersive
-  bootstrap --> hotkey
-  commands --> recorder
-  commands --> camera
-  commands --> settingsStore
-  commands --> immersive
-  recorder --> sck
-  camera --> ffmpegCam
-  sck --> sckStream
-  sck --> ffmpegVideo
-  sck --> ffmpegMic
-  sck --> mux
-  sck --> swift
-  ffmpegCam --> swift
+  app --> camWin
+
+  overlay --> recStore
+  settings --> setStore
+  overlay --> tsApi
+  settings --> tsApi
+  camWin --> tsApi
+
+  tsApi --> cmd
+  setup --> cmd
+  cmd --> rec
+  cmd --> cam
+  cmd --> imm
+  cmd --> cfg
+  cmd --> drive
+
+  rec --> sck
+  sck --> ffv
+  rec --> ffm
+  cam --> ffc
+  rec --> mux
 ```
 
-## Windows
+## Window Model
 
-Tauri defines three windows in `src-tauri/tauri.conf.json`.
+Defined in `src-tauri/tauri.conf.json`:
 
-| Window label | React component | Purpose |
-| --- | --- | --- |
-| `overlay` | `OverlayWindow` | Always-on-top control bar for record, pause, stop, mute, and camera toggle. |
-| `camera-overlay` | `CameraOverlayWindow` | Circular draggable webcam preview overlay. Hidden until camera is enabled. |
-| `settings` | `SettingsWindow` | Settings UI, currently focused on immersive-mode shortcut configuration. |
+- `overlay` (`88x330`): main recording controls, non-focusable, always-on-top.
+- `camera-overlay` (`200x200`): live webcam preview surface, non-focusable.
+- `settings` (`700x760`): focusable floating settings UI.
 
-`src/App.tsx` calls `getCurrentWindow()` and renders the correct window UI based on the label. This means the same React bundle serves all windows.
+`src/App.tsx` inspects window label (`getCurrentWindow().label`) and renders the matching root component.
+
+## Why The Windows Behave Differently
+
+- Overlay/camera are non-focusable so users can interact quickly without stealing app focus in normal use.
+- Settings is focusable so text/select inputs are editable.
+- Settings is draggable via `data-tauri-drag-region` on shell-only regions; interactive controls explicitly disable drag region.
 
 ## Backend State Ownership
 
-Rust state is registered in `lib.rs` during Tauri setup:
+Managed in `lib.rs` via `app.manage(...)`:
 
-| Managed state | Type | Responsibility |
-| --- | --- | --- |
-| Recorder | `Recorder` | User-facing recording lifecycle, elapsed clock, and delegation to ScreenCaptureKit recorder. |
-| Camera preview | `Mutex<CameraPreview>` | FFmpeg camera preview process and frame emission. |
-| Immersive mode | `Arc<Mutex<ImmersiveMode>>` | Whether overlay windows should be hidden. |
-| Settings | `SettingsStore` | JSON settings persisted under the OS config directory. |
+- `Recorder`: recording lifecycle + elapsed timer task + start/stop/pause/resume facade.
+- `Mutex<CameraPreview>`: camera preview FFmpeg process and frame emission.
+- `Arc<Mutex<ImmersiveMode>>`: runtime immersive flag.
+- `SettingsStore`: persisted JSON settings source of truth.
 
-The command layer in `src-tauri/src/commands/mod.rs` is an orchestration layer. It accepts Tauri invokes, calls services, updates windows, and emits events back to React.
+This keeps React as orchestration/UI and Rust as execution/state authority for media operations.
 
-## Recording Service Layers
+## Core Flows
+
+### 1) Recording Flow
 
 ```mermaid
-flowchart TB
-  control["ControlBar"]
-  invoke["startRecording() invoke"]
-  command["commands::start_recording"]
-  recorder["Recorder::start"]
-  sck["ScreenCaptureKitRecorder::start"]
-  startMod["start.rs start_recording"]
-  handlers["FrameHandler callbacks"]
-  stopMod["stop.rs stop_recording"]
-  muxMod["mux.rs mux_final_video"]
+sequenceDiagram
+  participant UI as OverlayWindow
+  participant CMD as commands::start_recording
+  participant REC as Recorder
+  participant SCK as ScreenCaptureKitRecorder
 
-  control --> invoke --> command --> recorder --> sck --> startMod
-  startMod --> handlers
-  control --> stopInvoke["stopRecording() invoke"]
-  stopInvoke --> stopCommand["commands::stop_recording"]
-  stopCommand --> recorderStop["Recorder::stop"]
-  recorderStop --> sckStop["ScreenCaptureKitRecorder::stop"]
-  sckStop --> stopMod --> muxMod
+  UI->>CMD: invoke start_recording(options)
+  CMD-->>UI: invoke resolves quickly
+  CMD->>REC: start_with_output_path(...)
+  REC->>SCK: start(...)
+  SCK-->>REC: started info
+  CMD-->>UI: emit recording-started
 ```
 
-`Recorder` is the public recording facade. It protects higher-level state such as "is recording", "is paused", elapsed time, output path, and whether mic/camera were included at start. It does not directly process media buffers.
+### 2) Stop + Finalize + Upload Flow
 
-`ScreenCaptureKitRecorder` owns platform recording state. It starts the ScreenCaptureKit stream, FFmpeg processes, raw writers, mute flags, pause flag, counters, temporary paths, and final mux.
+```mermaid
+sequenceDiagram
+  participant UI as OverlayWindow
+  participant CMD as commands::stop_recording
+  participant REC as Recorder
+  participant FS as finalize_recording_file
+  participant DR as google_drive::upload_video
 
-## Settings and Immersive Mode
+  UI->>CMD: invoke stop_recording()
+  CMD-->>UI: invoke resolves quickly
+  CMD->>REC: stop()
+  CMD-->>UI: emit recording-stopped
+  CMD->>FS: finalize local file
+  FS-->>UI: emit recording-saved
+  alt Google Drive enabled
+    FS-->>UI: emit drive-upload-pending
+    FS->>DR: upload + make public + readiness poll
+    DR-->>UI: emit drive-upload-complete or drive-upload-error
+  end
+```
 
-Settings are persisted as JSON by `SettingsStore`. Current settings:
+### 3) Settings Flow
 
-- `micEnabled`: whether microphone capture should be included when recording starts.
-- `cameraEnabled`: whether camera preview overlay should be shown and included visually in screen capture.
-- `immersiveShortcut`: global shortcut string, default `Option+I`.
-- `saveLocation`: optional output directory; otherwise recordings are copied to Downloads.
+- `SettingsWindow` loads three resources in parallel on mount:
+  - persisted settings (`get_settings`)
+  - canonical defaults (`get_default_settings`)
+  - capture devices (`list_capture_devices`)
+- UI keeps `draft`, `committed`, and `defaults` state.
+- `Save settings` persists `draft`.
+- `Reset to defaults` applies backend defaults and device resolution fallback.
 
-Immersive mode is runtime state, not persisted as an enabled setting. When enabled, it hides the control overlay and camera overlay. Recording continues normally.
+## Immersive Mode Behavior
 
-The global shortcut uses Carbon APIs in `services/hotkey.rs`. Updating the shortcut changes both the app menu accelerator and the Carbon hotkey registration.
+```mermaid
+flowchart LR
+  toggle["Menu or hotkey toggle"] --> setImm["set immersive flag"]
+  setImm --> overlay["overlay window hide/show"]
+  setImm --> camRule["recompute camera visibility"]
+  camRule --> camWindow["camera-overlay hide/show"]
+  setImm --> event["emit immersive-mode-changed"]
+```
 
-## Output Ownership
-
-Recording first writes a final temporary MP4 path under the OS temp directory, then `commands::save_recording_file` copies it to the configured save location or Downloads using the file name `momentum-recording-<unix_seconds>.mp4`.
-
-This means there are two levels of temporary output:
-
-1. ScreenCaptureKit recorder temp files used during capture and muxing.
-2. Recorder-level temporary final MP4 copied into the user-visible output directory.
+Immersive mode is runtime-only. The persisted setting is not "immersive on/off"; persisted setting is the shortcut and webcam-hide preference while immersive is active.

@@ -1,55 +1,76 @@
 # Momentum Documentation
 
-Momentum is a macOS-first desktop screen recorder built with Tauri, Rust, React, TypeScript, and FFmpeg. The app presents small always-on-top overlay windows while Rust coordinates screen, system audio, microphone, and camera preview capture.
+Momentum is a macOS-first desktop recorder built with Tauri, Rust, React, TypeScript, and FFmpeg.
 
-This documentation reflects the implementation in this repository, not only the product intent in `README.md` or `_AGENT/`.
+This folder is intended for engineers onboarding to the codebase. It documents what exists today in code, how the pieces fit, and where to make changes safely.
 
-## Start Here
+## Reading Order for New Developers
 
-- [Architecture](./architecture.md) explains the main processes, windows, Rust services, and state ownership.
-- [Recording Pipeline](./recording-pipeline.md) is the deep dive into screen, system audio, microphone, webcam preview, pause, mute, sync, and muxing.
-- [Frontend and Backend Contract](./frontend-backend-contract.md) documents the Tauri commands, events, and frontend state model.
-- [Platform Notes](./platform-notes.md) covers macOS dependencies, permissions, FFmpeg, and the Swift AVFoundation resolver.
+1. [Architecture](./architecture.md)
+2. [Frontend and Backend Contract](./frontend-backend-contract.md)
+3. [Recording Pipeline](./recording-pipeline.md)
+4. [Google Drive Integration](./google-drive.md)
+5. [Platform Notes](./platform-notes.md)
+6. [Dangers](./DANGERS%20%E2%9D%8C.md)
 
-## High-Level Shape
+## System At A Glance
 
 ```mermaid
 flowchart LR
-  user["User"] --> overlay["React overlay window"]
-  overlay --> commands["Tauri command wrappers"]
-  commands --> rust["Rust commands"]
-  rust --> recorder["Recorder service"]
+  user["User"] --> overlay["Overlay Window\nControlBar"]
+  user --> settings["Settings Window"]
+
+  overlay --> tsCommands["src/tauri/commands.ts"]
+  settings --> tsCommands
+  tsCommands --> rustCommands["src-tauri/src/commands/mod.rs"]
+
+  rustCommands --> recorder["Recorder service"]
+  rustCommands --> camera["Camera preview service"]
+  rustCommands --> settingsStore["SettingsStore"]
+  rustCommands --> drive["Google Drive service"]
+
   recorder --> sck["ScreenCaptureKit recorder"]
-  recorder --> camera["Camera preview service"]
   sck --> ffmpeg["FFmpeg processes"]
-  camera --> camEvents["camera-frame events"]
-  ffmpeg --> temp["Temporary media files"]
-  temp --> mux["Final FFmpeg mux"]
-  mux --> downloads["Saved MP4"]
-  rust --> events["Tauri events"]
+  camera --> cameraOverlay["Camera Overlay Window"]
+
+  rustCommands --> events["Tauri events"]
   events --> overlay
-  camEvents --> cameraWindow["React camera overlay window"]
+  events --> settings
+  events --> cameraOverlay
 ```
 
-## Important Current Behaviors
+## Current Product Behaviors (Implemented)
 
-- Screen video and system audio are captured through ScreenCaptureKit.
-- Microphone audio is captured by a separate FFmpeg `avfoundation` process.
-- Camera is captured by a separate FFmpeg `avfoundation` process for preview frames only. There is no independent camera track in the output file.
-- The webcam appears in the final recording only as a visible overlay window captured by the screen recorder.
-- Stop is not just "close the file": Rust stops the capture, finalizes temporary files, then runs a final FFmpeg mux to build the MP4.
-- Start and stop Tauri commands return immediately after spawning backend work. The frontend learns the actual result through events such as `recording-started`, `recording-saved`, and `recording-error`.
+- Overlay control bar is vertical, centered right, always on top, and non-focusable.
+- Settings window is a dedicated floating webview that is focusable and draggable.
+- Mic/camera selection is persisted, with fallback to available devices when stored IDs become invalid.
+- Immersive mode hides overlay windows at runtime and is toggleable from menu + global hotkey.
+- Recording finalization can upload to Google Drive and emit upload lifecycle events.
+- Upload completion is gated on Drive video readiness before share-success event emission.
 
-## Main Source Files
+## Source Map
 
-- Frontend entry and window routing: `src/App.tsx`
-- Overlay controls: `src/components/recording/ControlBar.tsx`
-- Tauri command wrappers: `src/tauri/commands.ts`
-- Tauri event wrappers: `src/tauri/events.ts`
-- App bootstrap and managed state: `src-tauri/src/lib.rs`
-- Rust command handlers: `src-tauri/src/commands/mod.rs`
-- Recorder service: `src-tauri/src/services/recording.rs`
-- Camera preview and camera sync: `src-tauri/src/services/camera.rs`
-- ScreenCaptureKit recorder: `src-tauri/src/services/platform/screencapturekit_recorder/`
-- FFmpeg locator: `src-tauri/src/services/platform/macos/ffmpeg.rs`
-- AVFoundation resolver: `src-tauri/resources/resolve_avf.swift`
+Core frontend:
+
+- `src/App.tsx`
+- `src/windows/OverlayWindow.tsx`
+- `src/components/recording/ControlBar.tsx`
+- `src/windows/SettingsWindow.tsx`
+- `src/windows/CameraOverlayWindow.tsx`
+
+Frontend Tauri boundary:
+
+- `src/tauri/commands.ts`
+- `src/tauri/events.ts`
+- `src/types/index.ts`
+
+Core backend:
+
+- `src-tauri/src/lib.rs`
+- `src-tauri/src/commands/mod.rs`
+- `src-tauri/src/models.rs`
+- `src-tauri/src/services/settings.rs`
+- `src-tauri/src/services/recording.rs`
+- `src-tauri/src/services/camera.rs`
+- `src-tauri/src/services/google_drive.rs`
+- `src-tauri/src/services/platform/screencapturekit_recorder/`

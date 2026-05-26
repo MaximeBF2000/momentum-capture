@@ -1,118 +1,79 @@
 # Platform Notes
 
-Momentum is currently macOS-specific. The Tauri app can be packaged for multiple targets in config, but the recording implementation relies on macOS APIs and AVFoundation device names.
+Momentum's active recording implementation is macOS-oriented.
 
-## Native Dependencies
+## macOS Dependencies
 
-Runtime dependencies:
+- ScreenCaptureKit (screen + system audio stream)
+- AVFoundation (mic/camera device inputs through FFmpeg)
+- FFmpeg binary accessible at runtime
+- Swift runtime path support for related tooling
 
-- macOS ScreenCaptureKit
-- macOS AVFoundation
-- FFmpeg
-- Swift command-line runtime / Xcode Command Line Tools for the AVFoundation resolver script
+## Permission Model
 
-Rust dependencies of note:
+User-facing permission descriptions are declared in:
 
-- `tauri` v2 with `macos-private-api`
-- `screencapturekit` pinned to `=1.3.0`
-- `objc`, `core-foundation`, and `core-media`
+- `src-tauri/resources/Info.plist`
 
-Frontend dependencies of note:
+Entitlements are in:
 
-- React 19
-- Zustand
-- Tailwind CSS
-- Lucide React
+- `src-tauri/entitlements/momentum.entitlements`
 
-## Permissions
+Expected permissions:
 
-The bundle declares usage descriptions in `src-tauri/resources/Info.plist`:
+- Screen Recording
+- Microphone
+- Camera
 
-- camera
-- microphone
-- screen capture
+## Window Configuration Notes
 
-The macOS entitlements in `src-tauri/entitlements/momentum.entitlements` include:
+From `src-tauri/tauri.conf.json`:
 
-- `com.apple.security.device.camera`
-- `com.apple.security.device.microphone`
-- `com.apple.security.personal-information.screen-recording`
+- Overlay and camera overlay are `focusable: false`, `focus: false`.
+- Settings is `focusable: true`, `focus: true`.
 
-At runtime, the app requires permission to capture the screen, camera, and microphone. Without these permissions, ScreenCaptureKit or FFmpeg AVFoundation capture can fail.
+Why this matters:
 
-## FFmpeg Resolution
+- non-focusable overlays reduce UX friction for quick controls
+- settings requires keyboard focus for editable inputs
 
-`FfmpegLocator` tries paths in this order:
+## FFmpeg Resolution Strategy
 
-1. `FFMPEG_PATH` environment variable
+`src-tauri/src/services/platform/macos/ffmpeg.rs` resolves FFmpeg by probing:
+
+1. `FFMPEG_PATH`
 2. `/opt/homebrew/bin/ffmpeg`
 3. `/usr/local/bin/ffmpeg`
 4. `/usr/bin/ffmpeg`
-5. `ffmpeg` from PATH
+5. `ffmpeg` on PATH
 
-The implementation verifies candidates by running `ffmpeg -version`.
+Each candidate is verified with `-version`.
 
-FFmpeg is used for:
+## Build-Time Google Env Injection
 
-- encoding raw BGRA screen frames into temporary H.264 MP4
-- capturing microphone raw PCM from AVFoundation
-- capturing camera preview MJPEG frames from AVFoundation
-- final muxing and audio filtering
+`src-tauri/build.rs` imports the following from shell env or repository `.env` and exposes them as compile-time env for Rust:
 
-## Swift AVFoundation Resolver
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
 
-`src-tauri/resources/resolve_avf.swift` is run by `device_resolver::resolve_avf_indices()`.
+This enables current local OAuth behavior and is intentionally called out as risky for distributed builds.
 
-It returns JSON containing:
+## Overlay Positioning
 
-- built-in microphone index
-- built-in camera index
-- main screen video index
-- BlackHole/system-audio index if found
-- camera count and active display index
+At setup, `position_overlay_windows` in `lib.rs`:
 
-Current usage:
+- places `overlay` near right edge, vertically centered
+- places `camera-overlay` near bottom-right corner
 
-- Built-in microphone index is used when starting mic FFmpeg capture.
-- Built-in camera index is used when starting camera preview.
-- System-audio/BlackHole index is logged but not used by the active ScreenCaptureKit system-audio path.
-- Main screen FFmpeg index is not used by the active ScreenCaptureKit screen-video path.
+This happens on startup; layout/size tweaks should account for these offsets.
 
-This distinction matters because some older notes and the project `README.md` mention system audio devices differently. The current code captures system audio through ScreenCaptureKit with `config.set_captures_audio(true)`.
+## Device Resolution Notes
 
-## Build and Test Commands
+The backend resolver returns rich device metadata:
 
-Common commands from `package.json`:
+- stable-ish ID string
+- display name
+- default flag
+- built-in flag
 
-```bash
-npm run dev
-npm run build
-npm run test
-npm run tauri dev
-npm run tauri build
-```
-
-There is also a `build-app` script that resets macOS TCC permissions, removes the Tauri target directory, and builds the app.
-
-## Bundled Resources
-
-Tauri config points at:
-
-- entitlements: `src-tauri/entitlements/momentum.entitlements`
-- Info.plist: `src-tauri/resources/Info.plist`
-- icons under `src-tauri/icons/`
-
-The Swift resolver is expected to be available from one of several locations:
-
-- app bundle Resources directory
-- `CARGO_MANIFEST_DIR/resources/`
-- current working directory under `src-tauri/resources/`
-- compile-time manifest path
-
-## Current Platform Limitations
-
-- Device selection is not exposed to users.
-- Built-in camera and built-in mic are preferred.
-- Screen target selection is not implemented.
-- Camera preview capture uses a separate FFmpeg process and base64 JPEG events, which is simple but expensive compared with a native shared texture or direct compositing path.
-- The app requires FFmpeg at runtime; it is not currently documented as bundled.
+Settings UI uses these to show expressive labels and recover from stale stored IDs.
