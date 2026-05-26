@@ -1,0 +1,6 @@
+- [ ] Add webcam starting position in settings window (top left, top right, bottom left, bottom right)
+- [ ] Add webcam shape in settings window (square, circle)
+- [ ] Make webcam resizable
+- [ ] Add shortcut for start/stop recording
+- [ ] Make shortcut selection work in settings window
+- [ ] Add download location in settings window
